@@ -47,6 +47,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   const { permissions } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProvider, setSelectedProvider] = useState<string>('all');
+  const [draftSelectedModel, setDraftSelectedModel] = useState<ModelOption>(selectedModel);
   const [isAddingCustom, setIsAddingCustom] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -69,6 +70,12 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   const { isMounted, isVisible, backdropClasses, cardClasses } = useModalAnimation({
     isOpen: Boolean(isOpen && permissions.canSelectModel),
   });
+
+  useEffect(() => {
+    if (isOpen) {
+      setDraftSelectedModel(selectedModel);
+    }
+  }, [isOpen, selectedModel]);
 
   // Close on Escape
   useEffect(() => {
@@ -696,7 +703,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
             {/* Model items list */}
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {filteredModels.map((model) => {
-                const isSelected = model.id === selectedModel.id;
+                const isSelected = model.id === draftSelectedModel.id;
                 const isLMKit = model.provider === 'LM-Kit One';
 
                 return (
@@ -711,10 +718,9 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                         ? 'bg-[#1e1e22] border-[#2b2b31] hover:border-neutral-600 hover:bg-[#222227]'
                         : 'bg-white border-neutral-200 hover:border-neutral-400 hover:bg-neutral-50 shadow-xs'
                     }`}
-                    onClick={() => {
-                      onSelectModel(model);
-                      onClose();
-                    }}
+  onClick={() => {
+    setDraftSelectedModel(model);
+  }}
                   >
                     <div className="space-y-1 min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -823,12 +829,15 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
             >
               <div className="flex items-center gap-1.5 text-neutral-400">
                 <span>Selected:</span>
-                <span className={`font-semibold ${isDark ? 'text-white' : 'text-black'}`}>{selectedModel.name}</span>
+                <span className={`font-semibold ${isDark ? 'text-white' : 'text-black'}`}>{draftSelectedModel.name}</span>
               </div>
               <button
                 type="button"
-                onClick={onClose}
-                className={`px-4 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer ${
+  onClick={() => {
+    onSelectModel(draftSelectedModel);
+    onClose();
+  }}
+  className={`px-4 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer ${
                   isDark
                     ? 'border-[#2e2e34] bg-[#222226] text-white hover:bg-[#2c2c32]'
                     : 'border-neutral-300 bg-white text-black hover:bg-neutral-100 shadow-xs'
