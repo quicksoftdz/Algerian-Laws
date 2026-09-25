@@ -1,0 +1,470 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Condensed:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,700&display=swap');
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color-scheme: dark;
+    --chat-background: #121214;
+    --assistant-card-background: transparent;
+    --assistant-card-border: transparent;
+  }
+
+  html.dark {
+    color-scheme: dark;
+    --chat-background: #121214;
+    --assistant-card-background: transparent;
+    --assistant-card-border: transparent;
+  }
+
+  html.light {
+    color-scheme: light;
+    --chat-background: #F8F9F7;
+    --assistant-card-background: #FFFFFF;
+    --assistant-card-border: #E8ECE6;
+    --assistant-card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.03), 0 1px 2px -1px rgba(0, 0, 0, 0.03);
+  }
+
+  html.dark body {
+    background-color: #121214;
+    color: #ffffff;
+  }
+
+  html.light body {
+    background-color: #F8F9F7;
+    color: #09090b;
+  }
+
+  body {
+    min-height: 100vh;
+    overflow-x: hidden;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+}
+
+/* Semantic theme utilities */
+.chat-page-bg {
+  background-color: var(--chat-background);
+}
+
+.assistant-card-surface {
+  background-color: var(--assistant-card-background);
+  border-color: var(--assistant-card-border);
+}
+
+/* Chat message normal prose text: 15px mobile, 16px desktop baseline for enhanced legibility */
+.chat-message-text {
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+@media (min-width: 640px) {
+  .chat-message-text {
+    font-size: 16px;
+    line-height: 1.625;
+  }
+}
+
+/* =========================================================
+   AI ASSISTANT RESPONSE TYPOGRAPHY (RTL & LTR)
+   ========================================================= */
+
+/* RTL / Arabic AI Assistant Responses: Tahoma 15px */
+.assistant-message.rtl,
+.chat-response-rtl,
+.assistant-message.rtl p,
+.chat-response-rtl p,
+.assistant-message.rtl h1,
+.chat-response-rtl h1,
+.assistant-message.rtl h2,
+.chat-response-rtl h2,
+.assistant-message.rtl h3,
+.chat-response-rtl h3,
+.assistant-message.rtl h4,
+.chat-response-rtl h4,
+.assistant-message.rtl li,
+.chat-response-rtl li,
+.assistant-message.rtl ul,
+.chat-response-rtl ul,
+.assistant-message.rtl ol,
+.chat-response-rtl ol,
+.assistant-message.rtl blockquote,
+.chat-response-rtl blockquote,
+.assistant-message.rtl table,
+.chat-response-rtl table,
+.assistant-message.rtl th,
+.chat-response-rtl th,
+.assistant-message.rtl td,
+.chat-response-rtl td {
+  font-family: Tahoma, Arial, sans-serif !important;
+  font-size: 15px !important;
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: plaintext;
+}
+
+/* LTR / English / French / Latin AI Assistant Responses: Roboto Condensed 15px */
+.assistant-message.ltr,
+.chat-response-ltr,
+.assistant-message.ltr p,
+.chat-response-ltr p,
+.assistant-message.ltr h1,
+.chat-response-ltr h1,
+.assistant-message.ltr h2,
+.chat-response-ltr h2,
+.assistant-message.ltr h3,
+.chat-response-ltr h3,
+.assistant-message.ltr h4,
+.chat-response-ltr h4,
+.assistant-message.ltr li,
+.chat-response-ltr li,
+.assistant-message.ltr ul,
+.chat-response-ltr ul,
+.assistant-message.ltr ol,
+.chat-response-ltr ol,
+.assistant-message.ltr blockquote,
+.chat-response-ltr blockquote,
+.assistant-message.ltr table,
+.chat-response-ltr table,
+.assistant-message.ltr th,
+.chat-response-ltr th,
+.assistant-message.ltr td,
+.chat-response-ltr td {
+  font-family: "Roboto Condensed", sans-serif !important;
+  font-size: 15px !important;
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+/* Ensure code blocks, pre tags, and monospace elements ALWAYS remain strictly LTR with code font */
+.assistant-message.rtl pre,
+.assistant-message.ltr pre,
+.chat-response-rtl pre,
+.chat-response-rtl .code-block-pre,
+.chat-response-rtl code.code-block-pre,
+.chat-response-ltr pre,
+.chat-response-ltr .code-block-pre,
+.chat-response-ltr code.code-block-pre,
+pre.code-block-pre,
+.code-block-pre {
+  direction: ltr !important;
+  text-align: left !important;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace !important;
+  unicode-bidi: isolate !important;
+}
+
+/* Explicit inline-code typography preservation: monospace with LTR bidi isolation */
+.chat-inline-code,
+.assistant-message.rtl code:not(.code-block-pre),
+.assistant-message.ltr code:not(.code-block-pre) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  font-size: 11px !important;
+  line-height: 1.4 !important;
+  direction: ltr !important;
+  unicode-bidi: isolate !important;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: #e4e4e7;
+  border-radius: 9999px;
+}
+
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: #d4d4d8;
+}
+
+/* Subtle fade-in animation for chat messages */
+@keyframes messageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-message-fade-in {
+  animation: messageFadeIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity, transform;
+}
+
+/* =========================================================
+   CODE BLOCK COMPONENT: Monospace Typography & Scrolling
+   ========================================================= */
+
+.code-block-pre {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace !important;
+  font-size: 13px !important;
+  line-height: 1.7 !important;
+  letter-spacing: -0.01em;
+  tab-size: 2;
+  -moz-tab-size: 2;
+  white-space: pre !important;
+  word-wrap: normal !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  padding: 0.875rem 1rem !important;
+  border-radius: 0 0 0.75rem 0.75rem;
+}
+
+@media (min-width: 640px) {
+  .code-block-pre {
+    padding: 1rem 1.25rem !important;
+  }
+}
+
+.code-block-pre code {
+  font-family: inherit !important;
+  font-size: 13px !important;
+  line-height: 1.7 !important;
+  white-space: pre !important;
+  word-wrap: normal !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  display: inline-block;
+  min-width: 100%;
+}
+
+/* Subtle, clean horizontal scrollbar for code blocks */
+.code-block-pre::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+
+.code-block-pre::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 0 0 10px 10px;
+}
+
+html.dark .code-block-pre {
+  scrollbar-color: #2e2e36 rgba(0, 0, 0, 0.2);
+}
+
+html.dark .code-block-pre::-webkit-scrollbar-thumb {
+  background: #2e2e36;
+  border-radius: 9999px;
+}
+
+html.dark .code-block-pre::-webkit-scrollbar-thumb:hover {
+  background: #444450;
+}
+
+html.light .code-block-pre {
+  scrollbar-color: #d1d5db rgba(0, 0, 0, 0.05);
+}
+
+html.light .code-block-pre::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 9999px;
+}
+
+html.light .code-block-pre::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* =========================================================
+   SYNTAX HIGHLIGHTING TOKENS (Highlight.js)
+   Supports: Delphi/Pascal, C#, JS, TS, HTML, CSS, SQL, Python,
+   JSON, Bash, PHP, Java, C/C++
+   Clearly distinguishes: Keywords, Strings, Comments, Numbers,
+   Functions & Methods, Variables, Classes & Types, Operators, Constants
+   ========================================================= */
+
+.hljs {
+  color: #e2e8f0;
+}
+
+/* 1. Keywords & Reserved Words */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+  color: #c084fc; /* Vibrant purple / violet */
+  font-weight: 500;
+}
+
+/* 2. Strings & Character Literals */
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string {
+  color: #4ade80; /* Soft, readable emerald green */
+}
+
+/* 3. Comments */
+.hljs-comment,
+.hljs-quote {
+  color: #71717a; /* Neutral slate/zinc gray */
+  font-style: italic;
+}
+
+/* 4. Numbers & Numeric Literals */
+.hljs-number,
+.hljs-literal {
+  color: #fb923c; /* Warm orange */
+}
+
+/* 5. Functions & Methods */
+.hljs-title.function_,
+.hljs-function .hljs-title,
+.hljs-section {
+  color: #60a5fa; /* Crisp electric blue */
+  font-weight: 500;
+}
+
+/* 6. Classes, Types, Built-ins, Interfaces & Structs */
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-built_in {
+  color: #38bdf8; /* Luminous sky / cyan */
+  font-weight: 500;
+}
+
+/* 7. Variables, Object Properties & Attributes */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-property {
+  color: #f1f5f9; /* Soft bright white / slate */
+}
+
+/* 8. Function Parameters & Argument Lists */
+.hljs-params {
+  color: #e2e8f0;
+}
+
+/* 9. Operators & Punctuation */
+.hljs-operator,
+.hljs-punctuation {
+  color: #94a3b8; /* Slate gray */
+}
+
+/* 10. Constants */
+.hljs-variable.constant_ {
+  color: #facc15; /* Golden amber */
+  font-weight: 500;
+}
+
+/* 11. HTML / XML Tags */
+.hljs-tag,
+.hljs-name {
+  color: #f43f5e; /* Rose / Coral red */
+}
+
+/* 12. Preprocessor Directives, Imports & Meta */
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-doctag {
+  color: #a78bfa; /* Lavender / violet */
+}
+
+.hljs-symbol,
+.hljs-bullet {
+  color: #38bdf8;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* Subtle 3-dot typing wave animation */
+@keyframes typingDot {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(-2.5px);
+    opacity: 1;
+  }
+}
+
+.animate-typing-dot-1 {
+  animation: typingDot 1.2s infinite ease-in-out;
+}
+
+.animate-typing-dot-2 {
+  animation: typingDot 1.2s infinite ease-in-out 0.2s;
+}
+
+.animate-typing-dot-3 {
+  animation: typingDot 1.2s infinite ease-in-out 0.4s;
+}
+
+/* Light mode syntax highlighting contrast enhancements */
+html.light .hljs {
+  color: #1e293b;
+}
+
+html.light .hljs-keyword,
+html.light .hljs-selector-tag,
+html.light .hljs-subst {
+  color: #7c3aed;
+  font-weight: 500;
+}
+
+html.light .hljs-string,
+html.light .hljs-regexp,
+html.light .hljs-meta .hljs-string {
+  color: #15803d;
+}
+
+html.light .hljs-comment,
+html.light .hljs-quote {
+  color: #64748b;
+  font-style: italic;
+}
+
+html.light .hljs-number,
+html.light .hljs-literal {
+  color: #c2410c;
+}
+
+html.light .hljs-title.function_,
+html.light .hljs-function {
+  color: #0369a1;
+}
+
+html.light .hljs-title.class_,
+html.light .hljs-type {
+  color: #0f766e;
+}
+
+html.light .hljs-variable,
+html.light .hljs-attr {
+  color: #4338ca;
+}
+
+html.light .hljs-tag,
+html.light .hljs-name {
+  color: #e11d48;
+}
+

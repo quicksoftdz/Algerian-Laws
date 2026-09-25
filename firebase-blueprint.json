@@ -1,0 +1,183 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile, registration credentials, and role information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "username": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "email": { "type": "string" },
+        "profession": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "createdAt": { "type": "number" },
+        "lastLoginAt": { "type": "number" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "UsernameIndex": {
+      "title": "UsernameIndex",
+      "description": "Index mapping for unique username lookup",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "username"]
+    },
+    "EmailIndex": {
+      "title": "EmailIndex",
+      "description": "Index mapping for unique email lookup",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "email"]
+    },
+    "PhoneIndex": {
+      "title": "PhoneIndex",
+      "description": "Index mapping for unique phone lookup",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "phoneNumber"]
+    },
+    "ChatSession": {
+      "title": "ChatSession",
+      "description": "User conversation session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "model": { "type": "string" }
+      },
+      "required": ["id", "title", "createdAt", "updatedAt"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User client preferences",
+      "type": "object",
+      "properties": {
+        "soundEffects": { "type": "boolean" },
+        "theme": { "type": "string" },
+        "autoScrollToBottom": { "type": "boolean" }
+      }
+    },
+    "SystemAIConfig": {
+      "title": "SystemAIConfig",
+      "description": "Administrator managed system AI model and provider configuration",
+      "type": "object",
+      "properties": {
+        "selectedModel": { "type": "string" },
+        "provider": { "type": "string" },
+        "temperature": { "type": "number" },
+        "systemPrompt": { "type": "string" },
+        "streamingEnabled": { "type": "boolean" },
+        "apiKey": { "type": "string" },
+        "updatedAt": { "type": "number" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["selectedModel", "provider", "updatedAt"]
+    },
+    "SystemLog": {
+      "title": "SystemLog",
+      "description": "System usage, security, and administrative audit log entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "level": { "type": "string", "enum": ["info", "warn", "error", "security", "config"] },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["id", "timestamp", "level", "action", "details"]
+    },
+    "AdminCredential": {
+      "title": "AdminCredential",
+      "description": "Administrator authentication credentials and password verification hash",
+      "type": "object",
+      "properties": {
+        "adminIdentifier": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "salt": { "type": "string" },
+        "updatedAt": { "type": "number" },
+        "lastLoginAt": { "type": "number" }
+      },
+      "required": ["adminIdentifier", "passwordHash", "salt", "updatedAt"]
+    },
+    "SharedChatSession": {
+      "title": "SharedChatSession",
+      "description": "Public temporary read-only snapshot of a chat session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "expiresAt": { "type": "number" },
+        "model": { "type": "string" },
+        "authorName": { "type": "string" },
+        "messages": { "type": "array" },
+        "isPublic": { "type": "boolean" }
+      },
+      "required": ["id", "title", "createdAt", "expiresAt", "messages"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile document"
+    },
+    "/usernames/{username}": {
+      "schema": { "$ref": "#/entities/UsernameIndex" },
+      "description": "Uniqueness index mapping for usernames"
+    },
+    "/emails/{emailKey}": {
+      "schema": { "$ref": "#/entities/EmailIndex" },
+      "description": "Uniqueness index mapping for emails"
+    },
+    "/phones/{phoneKey}": {
+      "schema": { "$ref": "#/entities/PhoneIndex" },
+      "description": "Uniqueness index mapping for phone numbers"
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/ChatSession" },
+      "description": "User chat sessions"
+    },
+    "/users/{userId}/settings/{docId}": {
+      "schema": { "$ref": "#/entities/UserSettings" },
+      "description": "User personal preferences"
+    },
+    "/system/{docId}": {
+      "schema": { "$ref": "#/entities/SystemAIConfig" },
+      "description": "System-wide AI configuration managed by administrators"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "System administrators registry"
+    },
+    "/admin_logs/{logId}": {
+      "schema": { "$ref": "#/entities/SystemLog" },
+      "description": "Administrative audit and system performance logs"
+    },
+    "/shared_chats/{shareId}": {
+      "schema": { "$ref": "#/entities/SharedChatSession" },
+      "description": "Public temporary read-only chat snapshots"
+    }
+  }
+}
