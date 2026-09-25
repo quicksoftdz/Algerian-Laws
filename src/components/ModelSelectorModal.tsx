@@ -26,7 +26,7 @@ interface ModelSelectorModalProps {
   isOpen: boolean;
   onClose: () => void;
   selectedModel: ModelOption;
-  onSelectModel: (model: ModelOption) => void;
+  onSelectModel: (model: ModelOption) => void | Promise<void>;
   customModels?: ModelOption[];
   onAddCustomModel?: (model: ModelOption) => void;
   onDeleteCustomModel?: (modelId: string) => void;
@@ -66,6 +66,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   const [testResult, setTestResult] = useState<LMKitTestResult | null>(null);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [modelToDelete, setModelToDelete] = useState<ModelOption | null>(null);
+  const [isSavingSelection, setIsSavingSelection] = useState(false);
 
   const { isMounted, isVisible, backdropClasses, cardClasses } = useModalAnimation({
     isOpen: Boolean(isOpen && permissions.canSelectModel),
@@ -833,11 +834,19 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               </div>
               <button
                 type="button"
-  onClick={() => {
-    onSelectModel(draftSelectedModel);
-    onClose();
-  }}
-  className={`px-4 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer ${
+                disabled={isSavingSelection}
+                onClick={async () => {
+                  setIsSavingSelection(true);
+                  try {
+                    await onSelectModel(draftSelectedModel);
+                    onClose();
+                  } catch (error) {
+                    console.error('Failed to save selected model:', error);
+                  } finally {
+                    setIsSavingSelection(false);
+                  }
+                }}
+                className={`px-4 py-1.5 rounded-xl text-xs font-medium border transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
                   isDark
                     ? 'border-[#2e2e34] bg-[#222226] text-white hover:bg-[#2c2c32]'
                     : 'border-neutral-300 bg-white text-black hover:bg-neutral-100 shadow-xs'

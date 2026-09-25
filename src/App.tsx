@@ -533,19 +533,20 @@ export default function App() {
     };
   }, [isThinking, settings.autoScrollToBottom, messages, scrollToBottom]);
 
-  const handleSelectModel = (model: ModelOption) => {
+  const handleSelectModel = async (model: ModelOption) => {
     assertAdmin(role, 'Selecting AI model');
-    setSelectedModel(model);
-    setSettings((prev) => ({ ...prev, selectedModel: model.id, provider: model.provider }));
 
-    // Persist system AI configuration to Firestore
-    saveSystemAIConfigToFirestore(
+    // Wait for the authoritative system configuration write before the dialog closes.
+    await saveSystemAIConfigToFirestore(
       {
         selectedModel: model.id,
         provider: model.provider,
       },
       role
-    ).catch((err) => console.warn('Failed to save system AI config:', err));
+    );
+
+    setSelectedModel(model);
+    setSettings((prev) => ({ ...prev, selectedModel: model.id, provider: model.provider }));
 
     if (activeSessionId) {
       const updated = sessions.map((s) => (s.id === activeSessionId ? { ...s, model: model.name } : s));
