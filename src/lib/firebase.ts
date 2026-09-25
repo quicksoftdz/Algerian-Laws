@@ -3,6 +3,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithEmailAndPassword,
   signOut,
   User as FirebaseUser,
 } from 'firebase/auth';
@@ -751,6 +752,18 @@ export async function authenticateAdminCredentials(
       { identifier: cleanId, email: adminEmail }
     );
     throw new Error('Invalid administrator credentials.');
+  }
+
+  // The application admin credential check is separate from Firebase Auth.
+  // Establish a real Firebase Auth session before returning an admin profile so
+  // Firestore rules can authorize writes to protected system documents.
+  try {
+    await signInWithEmailAndPassword(auth, adminEmail, cleanPass);
+  } catch (error) {
+    console.error('Firebase admin sign-in failed:', error);
+    throw new Error(
+      'Administrator credentials are valid, but this administrator is not signed into Firebase Auth.'
+    );
   }
 
   // 3. Update authoritative database state on successful authentication
