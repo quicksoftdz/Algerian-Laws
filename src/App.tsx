@@ -150,6 +150,7 @@ export default function App() {
   const [isThinking, setIsThinking] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
+  const pendingSystemModelIdRef = useRef<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
@@ -358,6 +359,14 @@ export default function App() {
     const unsubscribe = subscribeToSystemAIConfig((remoteConfig) => {
       if (remoteConfig) {
         if (remoteConfig.selectedModel) {
+          // Ignore an older snapshot that can arrive while our confirmed save is
+          // still propagating. The next snapshot with the requested ID clears it.
+          if (pendingSystemModelIdRef.current && remoteConfig.selectedModel !== pendingSystemModelIdRef.current) {
+            return;
+          }
+          if (remoteConfig.selectedModel === pendingSystemModelIdRef.current) {
+            pendingSystemModelIdRef.current = null;
+          }
           const customSaved = localStorage.getItem('lmkit_custom_models');
           const customList: ModelOption[] = customSaved ? JSON.parse(customSaved) : [];
           const combined = [...customList, ...AVAILABLE_MODELS];
@@ -550,13 +559,14 @@ export default function App() {
   const handleSelectModel = async (model: ModelOption) => {
     assertAdmin(role, 'Selecting AI model');
 
-    // Wait for the authoritative system configuration write before the dialog closes.
+    // Capture the argument directly; React state may still contain the previous model.
     const modelSettings = {
       selectedModel: model.id,
       provider: model.provider,
     };
+    pendingSystemModelIdRef.current = model.id;
 
-    // Wait for both Firebase preference stores before allowing the dialog to close.
+    // Persist the exact confirmed model before the modal is allowed to close.
     await saveSystemAIConfigToFirestore(modelSettings, role);
     if (user) {
       await saveUserSettingsToFirestore(user.uid, modelSettings);
