@@ -387,6 +387,20 @@ export default function App() {
     getUserSettingsFromFirestore(user.uid).then((remoteSettings) => {
       if (remoteSettings) {
         setSettings((prev) => ({ ...prev, ...remoteSettings }));
+
+        // Keep the model object in sync with the persisted model id so the
+        // selector opens with the value that was actually saved.
+        if (remoteSettings.selectedModel) {
+          const customSaved = localStorage.getItem('lmkit_custom_models');
+          const customList: ModelOption[] = customSaved ? JSON.parse(customSaved) : [];
+          const matched = [...customList, ...AVAILABLE_MODELS].find(
+            (model) => model.id === remoteSettings.selectedModel
+          );
+          if (matched) {
+            setSelectedModel(matched);
+          }
+        }
+
         if (remoteSettings.theme) {
           setTheme(remoteSettings.theme);
         }
@@ -537,16 +551,19 @@ export default function App() {
     assertAdmin(role, 'Selecting AI model');
 
     // Wait for the authoritative system configuration write before the dialog closes.
-    await saveSystemAIConfigToFirestore(
-      {
-        selectedModel: model.id,
-        provider: model.provider,
-      },
-      role
-    );
+    const modelSettings = {
+      selectedModel: model.id,
+      provider: model.provider,
+    };
+
+    // Wait for both Firebase preference stores before allowing the dialog to close.
+    await saveSystemAIConfigToFirestore(modelSettings, role);
+    if (user) {
+      await saveUserSettingsToFirestore(user.uid, modelSettings);
+    }
 
     setSelectedModel(model);
-    setSettings((prev) => ({ ...prev, selectedModel: model.id, provider: model.provider }));
+    setSettings((prev) => ({ ...prev, ...modelSettings }));
 
     if (activeSessionId) {
       const updated = sessions.map((s) => (s.id === activeSessionId ? { ...s, model: model.name } : s));
