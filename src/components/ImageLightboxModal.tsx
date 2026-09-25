@@ -75,7 +75,6 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
       className={`fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md transition-opacity duration-200 ease-out motion-reduce:transition-none ${
         isVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
       }`}
-      onClick={onClose}
     >
       <div
         className={`relative max-w-5xl w-full max-h-[92vh] flex flex-col rounded-2xl overflow-hidden shadow-2xl border ${

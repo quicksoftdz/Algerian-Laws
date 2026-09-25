@@ -75,7 +75,6 @@ export const AuthRequiredModal: React.FC<AuthRequiredModalProps> = ({
       aria-modal="true"
       aria-labelledby="auth-required-title"
       aria-describedby="auth-required-desc"
-      onClick={!isLoggingIn ? onClose : undefined}
       className={backdropClasses}
     >
       <div

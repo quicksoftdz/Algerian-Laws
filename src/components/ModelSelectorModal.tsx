@@ -176,7 +176,6 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="model-modal-title"
-      onClick={onClose}
       className={backdropClasses}
     >
       <div

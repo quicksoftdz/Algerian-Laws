@@ -45,7 +45,6 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby={ariaLabelledBy}
-      onClick={onClose}
       className={backdropClasses}
     >
       <div
