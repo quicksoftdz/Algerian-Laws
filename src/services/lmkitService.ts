@@ -1,158 +1,113 @@
-// LM-Kit One API client utility
-// Based on https://docs.lm-kit.com/lm-kit-one/api/index.html
-// LM-Kit One serves models via OpenAI, Anthropic, Ollama, and native REST dialects.
-// Default server port: 5189 (e.g. http://localhost:5189/v1)
+// LM-Kit One client. Localhost requests use the same-origin server gateway.
+// Production should keep LM-Kit credentials on the server.
 
 export interface LMKitTestResult {
   ok: boolean;
   message: string;
   detectedModels?: string[];
   latencyMs?: number;
-  serverInfo?: {
-    version?: string;
-    status?: string;
-  };
 }
 
-export function normalizeLMKitBaseUrl(url: string, dialect: string = 'openai'): string {
-  let clean = url.trim();
-  // Remove trailing slashes
-  clean = clean.replace(/\/+$/, '');
+const GATEWAY_PATH = '/api/lmkit';
 
-  if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-    clean = 'http://' + clean;
+function useGateway(baseUrl: string): boolean {
+  const value = baseUrl.trim().replace(/\/+$/, '');
+  if (value === GATEWAY_PATH || value.startsWith(GATEWAY_PATH + '/')) return true;
+
+  if (typeof window !== 'undefined') {
+    try {
+      const host = new URL(value).hostname;
+      return host === 'localhost' || host === '127.0.0.1';
+    } catch {
+      return false;
+    }
   }
+  return false;
+}
 
-  // If dialect is OpenAI and URL does not end with /v1, add it if no other path exists
+function normalizeLMKitBaseUrl(url: string, dialect = 'openai'): string {
+  let clean = url.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(clean)) clean = 'http://' + clean;
+
   if (dialect === 'openai') {
     try {
       const parsed = new URL(clean);
-      if (parsed.pathname === '' || parsed.pathname === '/') {
+      if (!parsed.pathname || parsed.pathname === '/') {
         parsed.pathname = '/v1';
         return parsed.toString().replace(/\/+$/, '');
       }
     } catch {
-      if (!clean.endsWith('/v1')) {
-        clean = `${clean}/v1`;
-      }
+      if (!clean.endsWith('/v1')) clean += '/v1';
     }
   }
-
   return clean;
 }
 
-/**
- * Test connectivity with an LM-Kit One server and discover served models.
- */
+async function errorFromResponse(response: Response, prefix: string): Promise<Error> {
+  const raw = await response.text().catch(() => '');
+  let detail = raw || response.statusText;
+  try {
+    const json = JSON.parse(raw);
+    detail = json?.error?.message || json?.message || json?.detail || detail;
+  } catch {
+    // Keep plain text.
+  }
+  return new Error(prefix + ' [HTTP ' + response.status + ']: ' + detail);
+}
+
+function modelIds(data: any): string[] {
+  if (Array.isArray(data?.data)) return data.data.map((m: any) => m?.id || m?.name).filter(Boolean);
+  if (Array.isArray(data?.models)) return data.models.map((m: any) => m?.name || m?.id).filter(Boolean);
+  return [];
+}
+
 export async function testLMKitConnection(
   baseUrl: string,
   apiKey?: string,
   dialect: 'openai' | 'anthropic' | 'ollama' | 'native' = 'openai'
 ): Promise<LMKitTestResult> {
-  const normalized = normalizeLMKitBaseUrl(baseUrl, dialect);
-  const startTime = Date.now();
-
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-  };
-
-  if (apiKey?.trim()) {
-    headers['Authorization'] = `Bearer ${apiKey.trim()}`;
-    if (dialect === 'anthropic') {
-      headers['x-api-key'] = apiKey.trim();
-      headers['anthropic-version'] = '2023-06-01';
-    }
-  }
-
-  // Try standard /models endpoint (OpenAI dialect on LM-Kit One)
-  const modelsEndpoint = normalized.endsWith('/v1')
-    ? `${normalized}/models`
-    : `${normalized}/v1/models`;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 7000);
+  const started = Date.now();
+  const gateway = useGateway(baseUrl);
 
   try {
-    const response = await fetch(modelsEndpoint, {
-      method: 'GET',
-      headers,
-      signal: controller.signal,
-    });
+    const endpoint = gateway
+      ? GATEWAY_PATH + '/models'
+      : (() => {
+          const normalized = normalizeLMKitBaseUrl(baseUrl, dialect);
+          return normalized.endsWith('/v1') ? normalized + '/models' : normalized + '/v1/models';
+        })();
 
-    clearTimeout(timeoutId);
-    const latencyMs = Date.now() - startTime;
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    // Never send the saved gateway secret from the browser.
+    if (!gateway && apiKey?.trim()) headers.Authorization = 'Bearer ' + apiKey.trim();
 
-    if (response.ok) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+    try {
+      const response = await fetch(endpoint, { headers, signal: controller.signal });
+      if (!response.ok) throw await errorFromResponse(response, 'LM-Kit connection failed');
       const data = await response.json();
-      let detectedModels: string[] = [];
-
-      if (Array.isArray(data.data)) {
-        detectedModels = data.data.map((m: any) => m.id || m.name).filter(Boolean);
-      } else if (Array.isArray(data.models)) {
-        detectedModels = data.models.map((m: any) => m.name || m.id).filter(Boolean);
-      }
-
+      const detectedModels = modelIds(data);
       return {
         ok: true,
-        message: `Successfully connected to LM-Kit One in ${latencyMs}ms!`,
+        message: (gateway ? 'LM-Kit One gateway connected in ' : 'LM-Kit One connected in ') + (Date.now() - started) + 'ms.',
         detectedModels,
-        latencyMs,
+        latencyMs: Date.now() - started,
       };
-    } else {
-      // If /models returned 404 or auth required, check /health/live or /health/ready
-      return {
-        ok: false,
-        message: `LM-Kit One server responded with status HTTP ${response.status}: ${response.statusText}`,
-        latencyMs,
-      };
+    } finally {
+      clearTimeout(timer);
     }
   } catch (err: any) {
-    clearTimeout(timeoutId);
-    const latencyMs = Date.now() - startTime;
-
-    // Try secondary probe to health endpoint if host root is available
-    try {
-      const hostRoot = new URL(normalized).origin;
-      const healthController = new AbortController();
-      const healthTimeout = setTimeout(() => healthController.abort(), 3000);
-
-      const healthRes = await fetch(`${hostRoot}/health/live`, {
-        method: 'GET',
-        signal: healthController.signal,
-      }).catch(() => null);
-
-      clearTimeout(healthTimeout);
-
-      if (healthRes && (healthRes.ok || healthRes.status === 200)) {
-        return {
-          ok: true,
-          message: `LM-Kit One server is running at ${hostRoot} (health check verified).`,
-          latencyMs,
-        };
-      }
-    } catch {
-      // ignore secondary probe
-    }
-
-    if (err.name === 'AbortError') {
-      return {
-        ok: false,
-        message: `Connection timed out after 7s. Please verify host and port (default is 5189).`,
-        latencyMs,
-      };
-    }
-
     return {
       ok: false,
-      message: `Failed to connect to ${normalized}: ${err.message || 'Network error'}. Check if LM-Kit One is running and CORS is permitted.`,
-      latencyMs,
+      message: err?.name === 'AbortError'
+        ? 'LM-Kit connection timed out after 7s.'
+        : (err?.message || 'Unable to connect to LM-Kit One.'),
+      latencyMs: Date.now() - started,
     };
   }
 }
 
-/**
- * Execute chat completion against LM-Kit One server
- */
 export async function executeLMKitChatCompletion(options: {
   baseUrl: string;
   apiKey?: string;
@@ -172,110 +127,94 @@ export async function executeLMKitChatCompletion(options: {
     temperature = 0.7,
   } = options;
 
-  const normalized = normalizeLMKitBaseUrl(baseUrl, dialect);
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-
-  if (apiKey?.trim()) {
-    headers['Authorization'] = `Bearer ${apiKey.trim()}`;
-    if (dialect === 'anthropic') {
-      headers['x-api-key'] = apiKey.trim();
-      headers['anthropic-version'] = '2023-06-01';
+  if (useGateway(baseUrl)) {
+    if (dialect !== 'openai') {
+      throw new Error('The LM-Kit gateway currently uses the OpenAI-compatible dialect.');
     }
+
+    const response = await fetch(GATEWAY_PATH + '/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: modelId === 'default' ? '' : modelId,
+        prompt,
+        systemPrompt,
+        temperature,
+      }),
+    });
+
+    if (!response.ok) throw await errorFromResponse(response, 'LM-Kit gateway error');
+    const data = await response.json();
+    if (typeof data?.text === 'string') return data.text;
+    throw new Error('LM-Kit gateway returned an unexpected response.');
   }
 
-  // 1. OpenAI Dialect (Default and primary for LM-Kit One)
+  const normalized = normalizeLMKitBaseUrl(baseUrl, dialect);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (apiKey?.trim()) headers.Authorization = 'Bearer ' + apiKey.trim();
+
   if (dialect === 'openai') {
     const endpoint = normalized.endsWith('/v1')
-      ? `${normalized}/chat/completions`
-      : `${normalized}/v1/chat/completions`;
+      ? normalized + '/chat/completions'
+      : normalized + '/v1/chat/completions';
 
-    const body = {
-      model: modelId || 'default',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
-      ],
-      temperature,
-      stream: false,
-    };
-
-    const res = await fetch(endpoint, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        model: modelId || 'default',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt },
+        ],
+        temperature,
+        stream: false,
+      }),
     });
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(`LM-Kit One API error [HTTP ${res.status}]: ${errText || res.statusText}`);
-    }
-
-    const data = await res.json();
+    if (!response.ok) throw await errorFromResponse(response, 'LM-Kit One API error');
+    const data = await response.json();
     const content = data?.choices?.[0]?.message?.content;
-    if (typeof content === 'string') {
-      return content;
-    }
-    throw new Error('Received unexpected response structure from LM-Kit One server.');
+    if (typeof content === 'string') return content;
+    throw new Error('Received an unexpected LM-Kit response.');
   }
 
-  // 2. Ollama Dialect
   if (dialect === 'ollama') {
-    const hostRoot = new URL(normalized).origin;
-    const endpoint = `${hostRoot}/api/chat`;
-
-    const body = {
-      model: modelId || 'default',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
-      ],
-      stream: false,
-    };
-
-    const res = await fetch(endpoint, {
+    const endpoint = new URL(normalized).origin + '/api/chat';
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        model: modelId || 'default',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt },
+        ],
+        stream: false,
+      }),
     });
-
-    if (!res.ok) {
-      throw new Error(`LM-Kit One (Ollama dialect) error: HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
+    if (!response.ok) throw await errorFromResponse(response, 'LM-Kit Ollama API error');
+    const data = await response.json();
     return data?.message?.content || data?.response || '';
   }
 
-  // 3. Anthropic Dialect
   if (dialect === 'anthropic') {
-    const endpoint = normalized.endsWith('/v1')
-      ? `${normalized}/messages`
-      : `${normalized}/v1/messages`;
-
-    const body = {
-      model: modelId || 'default',
-      system: systemPrompt,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 4096,
-      temperature,
-    };
-
-    const res = await fetch(endpoint, {
+    const endpoint = normalized.endsWith('/v1') ? normalized + '/messages' : normalized + '/v1/messages';
+    const response = await fetch(endpoint, {
       method: 'POST',
-      headers,
-      body: JSON.stringify(body),
+      headers: { ...headers, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: modelId || 'default',
+        system: systemPrompt,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 4096,
+        temperature,
+      }),
     });
-
-    if (!res.ok) {
-      throw new Error(`LM-Kit One (Anthropic dialect) error: HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
+    if (!response.ok) throw await errorFromResponse(response, 'LM-Kit Anthropic API error');
+    const data = await response.json();
     return data?.content?.[0]?.text || '';
   }
 
-  throw new Error(`Unsupported dialect: ${dialect}`);
+  throw new Error('Unsupported LM-Kit dialect: ' + dialect);
 }
