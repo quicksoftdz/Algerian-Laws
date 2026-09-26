@@ -4,6 +4,7 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   signOut,
   User as FirebaseUser,
 } from 'firebase/auth';
@@ -754,15 +755,28 @@ export async function authenticateAdminCredentials(
     throw new Error('Invalid administrator credentials.');
   }
 
-  // The application admin credential check is separate from Firebase Auth.
   // Establish a real Firebase Auth session before returning an admin profile so
-  // Firestore rules can authorize writes to protected system documents.
+  // Firestore rules can authorize writes to protected system documents. If the
+  // administrator has never been created in Firebase Auth, bootstrap that
+  // account with the credentials that were just validated above.
   try {
-    await signInWithEmailAndPassword(auth, adminEmail, cleanPass);
+    let authResult;
+    try {
+      authResult = await signInWithEmailAndPassword(auth, adminEmail, cleanPass);
+    } catch (error: any) {
+      if (error?.code !== 'auth/user-not-found') {
+        throw error;
+      }
+      authResult = await createUserWithEmailAndPassword(auth, adminEmail, cleanPass);
+    }
+
+    if (authResult.user.uid) {
+      adminUid = authResult.user.uid;
+    }
   } catch (error) {
     console.error('Firebase admin sign-in failed:', error);
     throw new Error(
-      'Administrator credentials are valid, but this administrator is not signed into Firebase Auth.'
+      'Administrator credentials are valid, but Firebase Auth could not sign in this administrator.'
     );
   }
 
