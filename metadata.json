@@ -1,0 +1,6 @@
+{
+  "name": "Dark Minimalist AI Chat Interface",
+  "description": "A high-contrast dark minimalist AI chat interface with deep gray palette, precision inputs, and quick action starters.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
