@@ -471,7 +471,15 @@ export const saveSystemAIConfigToFirestore = async (
   userRole: UserRole
 ) => {
   // Logic & Permission enforcement at the API layer
-  assertAdmin(userRole, 'Modifying System AI Configuration');
+  if (userRole !== 'admin') {
+    return;
+  }
+
+  // Security enforcement: writing to /system/config strictly requires an authenticated Firebase administrator.
+  // If not authenticated via Firebase Auth (e.g. unauthenticated session), skip remote write.
+  if (!auth.currentUser) {
+    return;
+  }
 
   const path = 'system/config';
   try {
@@ -479,7 +487,7 @@ export const saveSystemAIConfigToFirestore = async (
     const payload = sanitizeForFirestore({
       ...config,
       updatedAt: Date.now(),
-      updatedBy: auth.currentUser?.email || 'admin',
+      updatedBy: auth.currentUser.email || 'admin',
     });
     await setDoc(configRef, payload, { merge: true });
   } catch (error) {

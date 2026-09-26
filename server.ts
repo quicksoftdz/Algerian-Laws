@@ -27,7 +27,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'algerian-laws-ai' });
 });
 
-app.get('/api/ai/lmkit/models', async (_req, res) => {
+app.get(['/api/lmkit/models', '/api/ai/lmkit/models'], async (_req, res) => {
   try {
     const response = await fetch(lmkitEndpoint('/models'), {
       headers: { Accept: 'application/json', ...authHeaders(LMKIT_API_KEY) },
@@ -35,9 +35,16 @@ app.get('/api/ai/lmkit/models', async (_req, res) => {
     const text = await response.text();
     if (!response.ok) return res.status(response.status).type('application/json').send(text);
     const data = JSON.parse(text);
-    const models = Array.isArray(data?.data)
-      ? data.data.map((m: any) => m.id || m.name).filter(Boolean)
+    const rawList = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.models)
+      ? data.models
       : [];
+    const models = rawList
+      .map((m: any) => (typeof m === 'string' ? m : m?.id || m?.name))
+      .filter((id: any): id is string => typeof id === 'string' && Boolean(id.trim()));
     res.json({ models });
   } catch (error: any) {
     res.status(502).json({ error: error?.message || 'Unable to reach LM-Kit One' });

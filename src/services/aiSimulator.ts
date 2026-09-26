@@ -195,7 +195,8 @@ Title:`,
   if (model?.provider === 'LM-Kit One' || model?.customConfig) {
     try {
       const baseUrl = model.customConfig?.baseUrl || 'http://localhost:5189/v1';
-      const modelId = model.customConfig?.modelId || model.id;
+      const rawId = model.customConfig?.modelId || model.id;
+      const modelId = rawId.startsWith('lmkit/') ? rawId.replace(/^lmkit\//, '') : rawId;
       const dialect = model.customConfig?.dialect || 'openai';
       const keyToUse = model.customConfig?.apiKey || apiKey;
 
@@ -258,7 +259,8 @@ export async function generateResponse(
   // 1. If model is an LM-Kit One custom provider model, attempt direct live execution
   if (model.provider === 'LM-Kit One' || model.customConfig) {
     const baseUrl = model.customConfig?.baseUrl || 'http://localhost:5189/v1';
-    const modelId = model.customConfig?.modelId || model.id;
+    const rawId = model.customConfig?.modelId || model.id;
+    const modelId = rawId.startsWith('lmkit/') ? rawId.replace(/^lmkit\//, '') : rawId;
     const dialect = model.customConfig?.dialect || 'openai';
     const keyToUse = model.customConfig?.apiKey || apiKey;
 

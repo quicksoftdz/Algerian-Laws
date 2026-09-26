@@ -108,7 +108,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="settings-modal-title"
-      onClick={onClose}
       className={backdropClasses}
     >
       <div

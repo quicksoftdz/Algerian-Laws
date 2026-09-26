@@ -1,6 +1,8 @@
 // LM-Kit One client. Localhost requests use the same-origin server gateway.
 // Production should keep LM-Kit credentials on the server.
 
+import { ModelOption } from '../types/chat';
+
 export interface LMKitTestResult {
   ok: boolean;
   message: string;
@@ -9,6 +11,96 @@ export interface LMKitTestResult {
 }
 
 const GATEWAY_PATH = '/api/lmkit';
+
+/**
+ * Robustly parses model ID strings from any LM-Kit or OpenAI gateway JSON response.
+ * Handles array of strings, array of objects, { data: [...] }, and { models: [...] }.
+ */
+export function parseModelIdsFromGatewayResponse(data: any): string[] {
+  if (!data) return [];
+
+  // Direct array: ["qwen3.5:0.8b", ...] or [{ id: "qwen3.5:0.8b" }]
+  if (Array.isArray(data)) {
+    return data
+      .map((item) => (typeof item === 'string' ? item : item?.id || item?.name))
+      .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
+  }
+
+  // Standard OpenAI /v1/models format: { data: [...] }
+  if (Array.isArray(data?.data)) {
+    return data.data
+      .map((item: any) => (typeof item === 'string' ? item : item?.id || item?.name))
+      .filter((id: any): id is string => typeof id === 'string' && Boolean(id.trim()));
+  }
+
+  // Gateway format: { models: [...] }
+  if (Array.isArray(data?.models)) {
+    return data.models
+      .map((item: any) => (typeof item === 'string' ? item : item?.name || item?.id))
+      .filter((id: any): id is string => typeof id === 'string' && Boolean(id.trim()));
+  }
+
+  return [];
+}
+
+/**
+ * Converts a raw model ID returned by the LM-Kit gateway into a complete ModelOption structure.
+ * Does not hard-code model names.
+ */
+export function createLMKitModelOption(modelId: string): ModelOption {
+  const cleanName = modelId.startsWith('lmkit/') ? modelId.replace(/^lmkit\//, '') : modelId;
+  const canonicalId = modelId;
+
+  return {
+    id: canonicalId,
+    name: cleanName,
+    provider: 'LM-Kit One',
+    description: `Private on-premise LM-Kit model: ${cleanName}`,
+    contextWindow: '128k tokens',
+    speed: 'Ultra-fast',
+    isCustom: true,
+    customConfig: {
+      baseUrl: GATEWAY_PATH,
+      modelId: cleanName,
+      dialect: 'openai',
+      port: 5189,
+    },
+  };
+}
+
+/**
+ * Fetches available LM-Kit models from GET /api/lmkit/models.
+ * Does not crash if the gateway is unavailable.
+ */
+export async function fetchAvailableLMKitModels(): Promise<string[]> {
+  try {
+    const response = await fetch(GATEWAY_PATH + '/models', {
+      headers: { Accept: 'application/json' },
+    });
+    if (response.ok) {
+      const data = await response.json();
+      const detected = parseModelIdsFromGatewayResponse(data);
+      if (detected.length > 0) return detected;
+    }
+  } catch {
+    // ignore, fall through to fallback check
+  }
+
+  // Secondary fallback: in case the proxy/server mounts under /api/ai/lmkit/models
+  try {
+    const fallbackRes = await fetch('/api/ai/lmkit/models', {
+      headers: { Accept: 'application/json' },
+    });
+    if (fallbackRes.ok) {
+      const data = await fallbackRes.json();
+      return parseModelIdsFromGatewayResponse(data);
+    }
+  } catch {
+    // ignore
+  }
+
+  return [];
+}
 
 function useGateway(baseUrl: string): boolean {
   const value = baseUrl.trim().replace(/\/+$/, '');
@@ -56,9 +148,7 @@ async function errorFromResponse(response: Response, prefix: string): Promise<Er
 }
 
 function modelIds(data: any): string[] {
-  if (Array.isArray(data?.data)) return data.data.map((m: any) => m?.id || m?.name).filter(Boolean);
-  if (Array.isArray(data?.models)) return data.models.map((m: any) => m?.name || m?.id).filter(Boolean);
-  return [];
+  return parseModelIdsFromGatewayResponse(data);
 }
 
 export async function testLMKitConnection(
@@ -132,11 +222,39 @@ export async function executeLMKitChatCompletion(options: {
       throw new Error('The LM-Kit gateway currently uses the OpenAI-compatible dialect.');
     }
 
+    const cleanModel = modelId.startsWith('lmkit/') ? modelId.replace(/^lmkit\//, '') : modelId;
+    const finalModel = cleanModel === 'default' || cleanModel === 'local-model' ? '' : cleanModel;
+
+    // First attempt standard OpenAI completions endpoint (/api/lmkit/chat/completions)
+    try {
+      const openAiRes = await fetch(GATEWAY_PATH + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: finalModel || 'default',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+          temperature,
+          stream: false,
+        }),
+      });
+
+      if (openAiRes.ok) {
+        const data = await openAiRes.json();
+        const content = data?.choices?.[0]?.message?.content ?? data?.text;
+        if (typeof content === 'string') return content;
+      }
+    } catch {
+      // Fall through to /api/lmkit/chat
+    }
+
     const response = await fetch(GATEWAY_PATH + '/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: modelId === 'default' ? '' : modelId,
+        model: finalModel,
         prompt,
         systemPrompt,
         temperature,
@@ -146,6 +264,8 @@ export async function executeLMKitChatCompletion(options: {
     if (!response.ok) throw await errorFromResponse(response, 'LM-Kit gateway error');
     const data = await response.json();
     if (typeof data?.text === 'string') return data.text;
+    const content = data?.choices?.[0]?.message?.content;
+    if (typeof content === 'string') return content;
     throw new Error('LM-Kit gateway returned an unexpected response.');
   }
 

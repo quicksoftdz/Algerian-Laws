@@ -28,7 +28,7 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({
   className = '',
   backdropClassName = '',
   zIndex = 50,
-  closeOnBackdropClick = true,
+  closeOnBackdropClick = false,
   closeOnEscape = true,
   ariaLabel,
   ariaLabelledBy,

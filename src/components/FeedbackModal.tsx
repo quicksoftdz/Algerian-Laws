@@ -59,7 +59,6 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="feedback-modal-title"
-      onClick={onClose}
       className={backdropClasses}
     >
       <div

@@ -191,11 +191,6 @@ export const ShareModal: React.FC<ShareModalProps> = ({
       aria-modal="true"
       aria-labelledby="share-modal-title"
       className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs transition-opacity ${backdropClasses}`}
-      onClick={(e) => {
-        if (dialogRef.current && !dialogRef.current.contains(e.target as Node)) {
-          onClose();
-        }
-      }}
     >
       <div
         ref={dialogRef}

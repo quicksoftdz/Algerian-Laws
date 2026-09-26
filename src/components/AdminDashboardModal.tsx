@@ -218,7 +218,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
 
   if (!isAdmin || !permissions.canAccessAdminDashboard) {
     return (
-      <div className={backdropClasses} onClick={onClose}>
+      <div className={backdropClasses}>
         <div
           className={`w-full max-w-md rounded-2xl border p-6 text-center space-y-4 shadow-2xl ${
             isDark ? 'bg-[#18181b] border-rose-500/30 text-white' : 'bg-white border-rose-200 text-neutral-900'
@@ -248,7 +248,6 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="admin-dashboard-title"
-      onClick={onClose}
       className={backdropClasses}
     >
       <div

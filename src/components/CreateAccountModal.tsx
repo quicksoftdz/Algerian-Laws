@@ -245,7 +245,6 @@ export const CreateAccountModal: React.FC<CreateAccountModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-account-title"
-      onClick={!isSubmitting ? onClose : undefined}
       className={backdropClasses}
     >
       <div

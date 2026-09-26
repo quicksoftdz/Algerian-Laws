@@ -124,7 +124,6 @@ export const AdminSignInModal: React.FC<AdminSignInModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="admin-auth-dialog-title"
-      onClick={!isSubmitting ? handleCancel : undefined}
       className={backdropClasses}
     >
       <div

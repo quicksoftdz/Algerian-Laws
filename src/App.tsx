@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { RobotMascot } from './components/RobotMascot';
 import { TopBar } from './components/TopBar';
 import { ChatInput } from './components/ChatInput';
-import { ChatMessageList } from './components/ChatMessageList';
+import { ChatMessageList, formatTimeHHMM } from './components/ChatMessageList';
 import { ModelSelectorModal } from './components/ModelSelectorModal';
 import { SettingsModal } from './components/SettingsModal';
 import { FeedbackModal } from './components/FeedbackModal';
@@ -14,9 +14,17 @@ import { AuthRequiredModal } from './components/AuthRequiredModal';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
 import { ShareModal } from './components/ShareModal';
 import { SharedChatView } from './components/SharedChatView';
-import { AVAILABLE_MODELS } from './constants/models';
-import { ModelOption, Message, ChatSession, AppSettings, Attachment } from './types/chat';
+import { AVAILABLE_MODELS, DEFAULT_LMKIT_MODEL } from './constants/models';
+import {
+  ModelOption,
+  Message,
+  ChatSession,
+  AppSettings,
+  Attachment,
+  SystemAIConfig,
+} from './types/chat';
 import { generateResponse, generateChatTitle } from './services/aiSimulator';
+import { fetchAvailableLMKitModels, createLMKitModelOption } from './services/lmkitService';
 import { useAuth } from './context/AuthContext';
 import { useTheme } from './context/ThemeContext';
 import {
@@ -38,9 +46,7 @@ import {
   Building2,
 } from 'lucide-react';
 import { exportChatToPDF, exportSelectedResponsesToPDF } from './services/pdfExport';
-import { formatTimeHHMM } from './components/ChatMessageList';
 import { countMatchesInMessages } from './lib/highlightText';
-import { testLMKitConnection } from './services/lmkitService';
 import {
   subscribeToUserSessions,
   saveSessionToFirestore,
@@ -50,43 +56,43 @@ import {
   getUserSettingsFromFirestore,
   saveSystemAIConfigToFirestore,
   subscribeToSystemAIConfig,
+  logAdminEvent,
 } from './lib/firebase';
 import { assertAdmin } from './utils/permissions';
-import { SystemAIConfig } from './types/chat';
 
 const LANDING_QUICK_STARTERS = [
   {
     id: 'draft-legal-brief',
     icon: FileText,
     label: 'Draft a legal brief',
-    prompt:
-      'Draft a comprehensive legal brief analyzing contractual breach, liability, and remedies under the Algerian Civil Code.',
+    prompt: 'Draft a comprehensive legal brief analyzing contractual breach, liability, and remedies under the Algerian Civil Code.',
   },
   {
     id: 'algerian-civil-code',
     icon: Scale,
     label: 'Explain Algerian Civil Code',
-    prompt:
-      'Explain the core principles of contractual obligations, civil liability (Articles 124+), and contract formation under the Algerian Civil Code.',
+    prompt: 'Explain the core principles of contractual obligations, civil liability (Articles 124+), and contract formation under the Algerian Civil Code.',
   },
   {
     id: 'property-law',
     icon: Building2,
     label: 'Research property law',
-    prompt:
-      'Research property ownership rights, cadastral registration procedures (Le livret foncier), and real estate transfer regulations in Algeria.',
+    prompt: 'Research property ownership rights, cadastral registration procedures (Le livret foncier), and real estate transfer regulations in Algeria.',
   },
   {
     id: 'commercial-law',
     icon: BookOpen,
     label: 'Commercial law & litigation',
-    prompt:
-      'Outline commercial litigation procedures, corporate bylaws, and debt recovery mechanisms under Algerian Commercial Code.',
+    prompt: 'Outline commercial litigation procedures, corporate bylaws, and debt recovery mechanisms under Algerian Commercial Code.',
   },
 ];
 
 const AUTO_SCROLL_THRESHOLD = 120;
 
+/**
+ * Natural cubic ease-out curve for ChatGPT-grade smooth scrolling.
+ * Starts with steady smooth acceleration and decelerates naturally near the destination.
+ */
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
@@ -104,10 +110,78 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoScrollToBottom: true,
 };
 
+/**
+ * Resolves a model ID to its corresponding ModelOption object.
+ * Handles custom, base, and dynamically detected LM-Kit models (e.g. qwen3.5:0.8b).
+ */
+export function resolveModelFromId(
+  modelId: string,
+  customModels: ModelOption[] = [],
+  availableModels: ModelOption[] = AVAILABLE_MODELS,
+  dynamicLmkitModels: ModelOption[] = []
+): ModelOption {
+  if (!modelId) return dynamicLmkitModels[0] || availableModels[0] || DEFAULT_LMKIT_MODEL;
+
+  const combined = [...customModels, ...dynamicLmkitModels, ...availableModels];
+  const found = combined.find(
+    (m) =>
+      m.id === modelId ||
+      m.name === modelId ||
+      (m.customConfig?.modelId && m.customConfig.modelId === modelId) ||
+      (modelId.startsWith('lmkit/') && m.id === modelId.replace(/^lmkit\//, '')) ||
+      (m.id.startsWith('lmkit/') && m.id.replace(/^lmkit\//, '') === modelId)
+  );
+  if (found) return found;
+
+  // Handle dynamic LM-Kit models without hard-coded model names
+  const isLMKit =
+    modelId.startsWith('lmkit/') ||
+    modelId.startsWith('lmkit-custom-') ||
+    modelId.includes(':') ||
+    modelId.toLowerCase().includes('qwen') ||
+    modelId.toLowerCase().includes('deepseek-r1') ||
+    modelId.toLowerCase().includes('llama') ||
+    modelId.toLowerCase().includes('mistral');
+
+  if (isLMKit) {
+    return createLMKitModelOption(modelId);
+  }
+
+  // Fallback for custom or unknown IDs to avoid crashing and preserve selection
+  return {
+    id: modelId,
+    name: modelId,
+    provider: modelId.includes('gpt')
+      ? 'OpenAI'
+      : modelId.includes('gemini')
+      ? 'Google'
+      : modelId.includes('claude')
+      ? 'Anthropic'
+      : 'AI Provider',
+    description: `Persisted configuration model: ${modelId}`,
+    contextWindow: '128k tokens',
+    speed: 'Fast',
+  };
+}
+
 export default function App() {
   const { user, role, permissions } = useAuth();
   const { theme, toggleTheme, setTheme } = useTheme();
 
+  // Reference to prevent stale/old Firestore config snapshots from reverting a newer local model selection
+  const lastLocalSelectionRef = useRef<{ id: string; timestamp: number } | null>(null);
+
+  // Canonical App Settings (Single Source of Truth for selectedModel and AI configuration)
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try {
+      const saved = localStorage.getItem('minimal_chat_settings');
+      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
+
+  // Custom LM-Kit / User-defined models stored in localStorage
   const [customModels, setCustomModels] = useState<ModelOption[]>(() => {
     try {
       const saved = localStorage.getItem('lmkit_custom_models');
@@ -117,79 +191,70 @@ export default function App() {
     }
   });
 
+  // Dynamically detected LM-Kit models discovered from local server gateway (/api/lmkit/models)
   const [lmkitModels, setLmkitModels] = useState<ModelOption[]>([]);
 
-  const allModels = useMemo(() => {
-    const customIds = new Set(customModels.map((m) => m.id));
-    const lmkitIds = new Set(lmkitModels.map((m) => m.id));
-    const base = AVAILABLE_MODELS.filter(
-      (m) => !customIds.has(m.id) && !lmkitIds.has(m.id)
-    );
-    return [...lmkitModels, ...customModels, ...base];
-  }, [customModels, lmkitModels]);
-
+  // Discover and fetch available LM-Kit models from GET /api/lmkit/models on application startup
   useEffect(() => {
-    let cancelled = false;
+    let isCancelled = false;
 
-    const loadLMKitModels = async () => {
-      const result = await testLMKitConnection('/api/lmkit');
-      if (cancelled || !result.ok || !result.detectedModels) return;
+    fetchAvailableLMKitModels()
+      .then((modelIds) => {
+        if (!isCancelled && modelIds.length > 0) {
+          const detected = modelIds.map((id) => createLMKitModelOption(id));
+          setLmkitModels(detected);
+        }
+      })
+      .catch(() => {
+        // Gateway unavailable - keep existing predefined models without crashing
+      });
 
-      const models: ModelOption[] = result.detectedModels.map((modelId) => ({
-        id: `lmkit/${modelId}`,
-        name: modelId,
-        provider: 'LM-Kit One',
-        description: 'Private local model served by LM-Kit One.',
-        contextWindow: 'Unknown',
-        speed: 'Ultra-fast',
-        isCustom: true,
-        customConfig: {
-          baseUrl: '/api/lmkit',
-          modelId,
-          dialect: 'openai',
-          port: 5189,
-        },
-      }));
-
-      setLmkitModels(models);
-    };
-
-    loadLMKitModels();
     return () => {
-      cancelled = true;
+      isCancelled = true;
     };
   }, []);
 
-  const [selectedModel, setSelectedModel] = useState<ModelOption>(() => {
-    try {
-      const savedSettings = localStorage.getItem('minimal_chat_settings');
-      if (savedSettings) {
-        const parsed = JSON.parse(savedSettings);
-        if (parsed.selectedModel) {
-          const customSaved = localStorage.getItem('lmkit_custom_models');
-          const customList: ModelOption[] = customSaved ? JSON.parse(customSaved) : [];
-          const combined = [...customList, ...AVAILABLE_MODELS];
-          const matched = combined.find((m) => m.id === parsed.selectedModel);
-          if (matched) return matched;
-        }
+  // Authoritative Derived Selected Model (Strictly derived from canonical settings.selectedModel)
+  const selectedModel: ModelOption = useMemo(() => {
+    return resolveModelFromId(settings.selectedModel, customModels, AVAILABLE_MODELS, lmkitModels);
+  }, [settings.selectedModel, customModels, lmkitModels]);
+
+  // Combined models list with stable dynamic models inclusion and deduplication
+  const allModels = useMemo(() => {
+    const modelMap = new Map<string, ModelOption>();
+
+    // 1. Add detected LM-Kit gateway models
+    for (const m of lmkitModels) {
+      modelMap.set(m.id, m);
+      if (m.customConfig?.modelId) {
+        modelMap.set(m.customConfig.modelId, m);
       }
-    } catch {
-      // ignore
     }
-    return AVAILABLE_MODELS[0];
-  });
 
-  const pendingModelSelectionRef = useRef<string | null>(null);
+    // 2. Add custom user-defined models
+    for (const m of customModels) {
+      modelMap.set(m.id, m);
+    }
+
+    // 3. Add predefined base models (skip DEFAULT_LMKIT_MODEL placeholder if real models exist)
+    for (const m of AVAILABLE_MODELS) {
+      if (m.id === 'lmkit/local-model' && lmkitModels.length > 0) {
+        continue;
+      }
+      if (!modelMap.has(m.id)) {
+        modelMap.set(m.id, m);
+      }
+    }
+
+    // 4. Always ensure the selectedModel is present
+    if (selectedModel && !modelMap.has(selectedModel.id)) {
+      modelMap.set(selectedModel.id, selectedModel);
+    }
+
+    return Array.from(new Set(modelMap.values()));
+  }, [customModels, lmkitModels, selectedModel]);
+
   const [quotedInsert, setQuotedInsert] = useState<{ text: string; id: number } | null>(null);
-
-  const [settings, setSettings] = useState<AppSettings>(() => {
-    try {
-      const saved = localStorage.getItem('minimal_chat_settings');
-      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-    } catch {
-      return DEFAULT_SETTINGS;
-    }
-  });
 
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     try {
@@ -209,10 +274,7 @@ export default function App() {
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isAdminSignInOpen, setIsAdminSignInOpen] = useState(false);
   const [isAuthRequiredModalOpen, setIsAuthRequiredModalOpen] = useState(false);
-  const [pendingMessage, setPendingMessage] = useState<{
-    content: string;
-    attachments?: Attachment[];
-  } | null>(null);
+  const [pendingMessage, setPendingMessage] = useState<{ content: string; attachments?: Attachment[] } | null>(null);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareTargetMessage, setShareTargetMessage] = useState<Message | null>(null);
@@ -223,7 +285,6 @@ export default function App() {
     }
     return null;
   });
-
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -250,16 +311,17 @@ export default function App() {
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
+  // Floating jump-to-bottom and back-to-top indicators & progress
   const [showScrollBottom, setShowScrollBottom] = useState<boolean>(false);
   const [showScrollTop, setShowScrollTop] = useState<boolean>(false);
   const [scrollProgress, setScrollProgress] = useState<number>(0);
-
+  // Track whether automatic follow-to-bottom is currently active
   const isNearBottomRef = useRef<boolean>(true);
   const shouldAutoFollowRef = useRef<boolean>(true);
   const scrollRafIdRef = useRef<number | null>(null);
   const prevIsThinkingRef = useRef<boolean>(false);
 
+  // Smooth scroll animation controller ref
   const smoothScrollAnimRef = useRef<{
     rafId: number | null;
     startTime: number;
@@ -281,6 +343,10 @@ export default function App() {
     }
   }, []);
 
+  /**
+   * Smoothly animates the chatContainerRef to targetScrollTop with an elegant ease-out deceleration curve.
+   * If an animation is already in progress, seamlessly retargets toward the growing height without stutter or jump.
+   */
   const smoothScrollTo = useCallback(
     (targetScrollTop: number, customDuration?: number) => {
       const container = chatContainerRef.current;
@@ -305,11 +371,13 @@ export default function App() {
         return;
       }
 
+      // If animation is actively running, dynamically retarget to newest height without resetting progress
       if (smoothScrollAnimRef.current.rafId !== null) {
         smoothScrollAnimRef.current.targetTop = targetScrollTop;
         return;
       }
 
+      // Controlled, natural duration based on travel distance (240ms - 460ms)
       const duration =
         customDuration ?? Math.min(460, Math.max(240, Math.round(Math.sqrt(distance) * 14)));
 
@@ -349,6 +417,9 @@ export default function App() {
     [stopSmoothScroll]
   );
 
+  /**
+   * Re-activates automatic scrolling and smoothly glides to the true bottom of the conversation.
+   */
   const scrollToBottom = useCallback(
     (customDuration?: number) => {
       shouldAutoFollowRef.current = true;
@@ -363,6 +434,7 @@ export default function App() {
     [smoothScrollTo]
   );
 
+  // Interrupt active smooth animation immediately if user manually touches/scrolls
   useEffect(() => {
     const container = chatContainerRef.current;
     if (!container) return;
@@ -383,6 +455,7 @@ export default function App() {
     };
   }, [stopSmoothScroll]);
 
+  // Reset in-chat search and maintain scroll on session switch
   useEffect(() => {
     setChatSearchQuery('');
     setIsSearchOpen(false);
@@ -399,74 +472,85 @@ export default function App() {
     });
   }, [activeSessionId]);
 
+  // Subscribe to real-time System AI Configuration (Admin managed model and parameters)
   useEffect(() => {
     const unsubscribe = subscribeToSystemAIConfig((remoteConfig) => {
-      if (!remoteConfig) return;
-
-      const pendingModelId = pendingModelSelectionRef.current;
-      const remoteModelId = remoteConfig.selectedModel;
-
-      const shouldIgnoreRemoteModel =
-        !!pendingModelId && !!remoteModelId && remoteModelId !== pendingModelId;
-
-      if (remoteModelId && !shouldIgnoreRemoteModel) {
-        const customSaved = localStorage.getItem('lmkit_custom_models');
-        const customList: ModelOption[] = customSaved ? JSON.parse(customSaved) : [];
-        const combined = [...lmkitModels, ...customList, ...AVAILABLE_MODELS];
-        const matched = combined.find((m) => m.id === remoteModelId);
-
-        if (matched) {
-          setSelectedModel(matched);
+      if (remoteConfig) {
+        const local = lastLocalSelectionRef.current;
+        // Deterministic check: ignore if the incoming remote config has an updatedAt
+        // strictly older than our local write timestamp.
+        if (
+          local &&
+          remoteConfig.updatedAt &&
+          remoteConfig.updatedAt < local.timestamp
+        ) {
+          return;
         }
 
-        if (pendingModelId === remoteModelId) {
-          pendingModelSelectionRef.current = null;
-        }
+        setSettings((prev) => {
+          if (
+            remoteConfig.selectedModel === prev.selectedModel &&
+            remoteConfig.provider === prev.provider &&
+            (remoteConfig.temperature === undefined || remoteConfig.temperature === prev.temperature) &&
+            (remoteConfig.systemPrompt === undefined || remoteConfig.systemPrompt === prev.systemPrompt) &&
+            (remoteConfig.streamingEnabled === undefined || remoteConfig.streamingEnabled === prev.streamingEnabled)
+          ) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            selectedModel: remoteConfig.selectedModel || prev.selectedModel,
+            provider: remoteConfig.provider || prev.provider,
+            temperature: remoteConfig.temperature ?? prev.temperature,
+            systemPrompt: remoteConfig.systemPrompt || prev.systemPrompt,
+            streamingEnabled: remoteConfig.streamingEnabled ?? prev.streamingEnabled,
+          };
+        });
       }
-
-      setSettings((prev) => ({
-        ...prev,
-        ...(shouldIgnoreRemoteModel
-          ? {}
-          : {
-              selectedModel: remoteConfig.selectedModel || prev.selectedModel,
-              provider: remoteConfig.provider || prev.provider,
-            }),
-        temperature: remoteConfig.temperature ?? prev.temperature,
-        systemPrompt: remoteConfig.systemPrompt || prev.systemPrompt,
-        streamingEnabled: remoteConfig.streamingEnabled ?? prev.streamingEnabled,
-      }));
     });
 
     return () => unsubscribe();
-  }, [lmkitModels]);
+  }, []);
 
+  // Sync personal client settings with Firestore when user logs in
   useEffect(() => {
     if (!user) return;
+
     getUserSettingsFromFirestore(user.uid).then((remoteSettings) => {
       if (remoteSettings) {
-        setSettings((prev) => ({ ...prev, ...remoteSettings }));
+        setSettings((prev) => ({
+          ...prev,
+          ...remoteSettings,
+          // CRITICAL: Preserve current system AI model configuration
+          selectedModel: prev.selectedModel || remoteSettings.selectedModel || DEFAULT_SETTINGS.selectedModel,
+          provider: prev.provider || remoteSettings.provider || DEFAULT_SETTINGS.provider,
+        }));
         if (remoteSettings.theme) {
           setTheme(remoteSettings.theme);
         }
       }
     });
-  }, [user, setTheme]);
+  }, [user]);
 
+  // Subscribe to real-time user sessions from Firestore when logged in
   useEffect(() => {
     if (!user) return;
+
     const unsubscribe = subscribeToUserSessions(user.uid, (remoteSessions) => {
       if (remoteSessions && remoteSessions.length > 0) {
         setSessions(remoteSessions);
       }
     });
+
     return () => unsubscribe();
   }, [user]);
 
+  // Save settings to localStorage and Firestore
   useEffect(() => {
     try {
       localStorage.setItem('minimal_chat_settings', JSON.stringify(settings));
-    } catch {
+    } catch (e) {
       // ignore
     }
 
@@ -477,18 +561,21 @@ export default function App() {
     }
   }, [settings, user]);
 
+  // Save sessions to localStorage as cache
   useEffect(() => {
     try {
       localStorage.setItem('minimal_chat_sessions', JSON.stringify(sessions));
-    } catch {
+    } catch (e) {
       // ignore
     }
   }, [sessions]);
 
+  // Active session and messages
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
   const messages: Message[] = activeSession ? activeSession.messages : [];
   const totalMatches = countMatchesInMessages(messages, chatSearchQuery);
 
+  // Keyboard shortcuts: Cmd+K for new chat, Cmd+F for in-chat search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -501,7 +588,7 @@ export default function App() {
           setTimeout(() => chatSearchInputRef.current?.focus(), 50);
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === ',') {
-        if (permissions?.canAccessSettings) {
+        if (permissions.canAccessSettings) {
           e.preventDefault();
           setIsSettingsOpen((prev) => !prev);
         }
@@ -509,14 +596,21 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [messages.length, permissions]);
+  }, [messages.length]);
 
+  // Robust ChatGPT-Style Auto-Scroll:
+  // 1. On Send/Action: Viewport immediately smoothly moves toward the newest message.
+  // 2. During streaming / thinking: Follows incoming tokens/content with throttled ease-out animation.
+  // 3. Dynamic content (Markdown, code blocks, tables, images, math): ResizeObserver guarantees height changes smoothly follow bottom.
+  // 4. On AI generation finish: Performs a graceful final ease-out smooth scroll to the exact bottom of the complete response.
+  // 5. User scroll override: If user manually scrolls up past 120px (AUTO_SCROLL_THRESHOLD), pauses auto-follow until user sends again or scrolls down.
   useEffect(() => {
     const container = chatContainerRef.current;
     if (!container) return;
 
     let resizeThrottleTimer: number | null = null;
 
+    // ResizeObserver watches inner height expansions (markdown rendering, streaming tokens, code highlights, images)
     const resizeObserver = new ResizeObserver(() => {
       if (settings.autoScrollToBottom === false) return;
       if (!shouldAutoFollowRef.current) return;
@@ -544,12 +638,14 @@ export default function App() {
     };
   }, [isThinking, settings.autoScrollToBottom, activeSessionId, smoothScrollTo]);
 
+  // Generation finish transition effect: performs final smooth ease-out scroll
   useEffect(() => {
     const wasThinking = prevIsThinkingRef.current;
     prevIsThinkingRef.current = isThinking;
 
     if (settings.autoScrollToBottom === false) return;
 
+    // Detect exact moment generation finishes
     const generationJustFinished = wasThinking && !isThinking;
 
     if (generationJustFinished && shouldAutoFollowRef.current) {
@@ -558,6 +654,7 @@ export default function App() {
         scrollRafIdRef.current = null;
       }
 
+      // Wait for layout to settle (Markdown, syntax highlighting, DOM paint)
       scrollRafIdRef.current = requestAnimationFrame(() => {
         scrollRafIdRef.current = requestAnimationFrame(() => {
           if (!chatContainerRef.current || !shouldAutoFollowRef.current) return;
@@ -577,35 +674,38 @@ export default function App() {
 
   const handleSelectModel = (model: ModelOption) => {
     assertAdmin(role, 'Selecting AI model');
+    const now = Date.now();
+    lastLocalSelectionRef.current = { id: model.id, timestamp: now };
 
-    pendingModelSelectionRef.current = model.id;
-    setSelectedModel(model);
+    setSettings((prev) => {
+      const nextSettings = { ...prev, selectedModel: model.id, provider: model.provider };
+      try {
+        localStorage.setItem('minimal_chat_settings', JSON.stringify(nextSettings));
+      } catch (e) {
+        // ignore
+      }
+      return nextSettings;
+    });
 
-    setSettings((prev) => ({
-      ...prev,
-      selectedModel: model.id,
-      provider: model.provider,
-    }));
-
-    saveSystemAIConfigToFirestore(
-      {
-        selectedModel: model.id,
-        provider: model.provider,
-      },
-      role
-    ).catch((err) => console.warn('Failed to save system AI config:', err));
+    // Persist system AI configuration to Firestore with timestamp (admin only)
+    if (role === 'admin' && user) {
+      saveSystemAIConfigToFirestore(
+        {
+          selectedModel: model.id,
+          provider: model.provider,
+          updatedAt: now,
+        },
+        role
+      ).catch((err) => console.warn('Failed to save system AI config:', err));
+    }
 
     if (activeSessionId) {
-      setSessions((prev) => {
-        const updated = prev.map((s) =>
-          s.id === activeSessionId ? { ...s, model: model.name } : s
-        );
-        const target = updated.find((s) => s.id === activeSessionId);
-        if (target && user) {
-          saveSessionToFirestore(user.uid, target);
-        }
-        return updated;
-      });
+      const updated = sessions.map((s) => (s.id === activeSessionId ? { ...s, model: model.name } : s));
+      setSessions(updated);
+      const target = updated.find((s) => s.id === activeSessionId);
+      if (target && user) {
+        saveSessionToFirestore(user.uid, target);
+      }
     }
   };
 
@@ -615,7 +715,7 @@ export default function App() {
       const updated = [newModel, ...prev.filter((m) => m.id !== newModel.id)];
       try {
         localStorage.setItem('lmkit_custom_models', JSON.stringify(updated));
-      } catch {
+      } catch (e) {
         // ignore
       }
       return updated;
@@ -628,14 +728,14 @@ export default function App() {
       const updated = prev.filter((m) => m.id !== modelId);
       try {
         localStorage.setItem('lmkit_custom_models', JSON.stringify(updated));
-      } catch {
+      } catch (e) {
         // ignore
       }
       return updated;
     });
 
-    if (selectedModel.id === modelId) {
-      setSelectedModel(AVAILABLE_MODELS[0]);
+    if (settings.selectedModel === modelId) {
+      handleSelectModel(AVAILABLE_MODELS[0]);
     }
   };
 
@@ -643,11 +743,13 @@ export default function App() {
     const clean = rawText.trim();
     if (!clean) return;
 
+    // Convert into markdown blockquote (prepend '>' to lines)
     const lines = clean.split('\n');
     const quoted = lines.map((l) => (l.length > 0 ? `> ${l}` : '>')).join('\n') + '\n\n';
 
     setQuotedInsert({ text: quoted, id: Date.now() });
 
+    // Ensure bottom prompt edit box is in view
     setTimeout(() => {
       if (chatContainerRef.current) {
         chatContainerRef.current.scrollTo({
@@ -660,19 +762,23 @@ export default function App() {
 
   const handleUpdateSettings = (newSettings: Partial<AppSettings>) => {
     assertAdmin(role, 'Updating system settings');
+    const now = Date.now();
+    if (newSettings.selectedModel) {
+      lastLocalSelectionRef.current = { id: newSettings.selectedModel, timestamp: now };
+    }
     setSettings((prev) => ({ ...prev, ...newSettings }));
 
+    // Persist system AI configuration to Firestore
     const systemPayload: Partial<SystemAIConfig> = {};
     if (newSettings.selectedModel) systemPayload.selectedModel = newSettings.selectedModel;
     if (newSettings.provider) systemPayload.provider = newSettings.provider;
     if (newSettings.temperature !== undefined) systemPayload.temperature = newSettings.temperature;
     if (newSettings.systemPrompt !== undefined) systemPayload.systemPrompt = newSettings.systemPrompt;
-    if (newSettings.streamingEnabled !== undefined)
-      systemPayload.streamingEnabled = newSettings.streamingEnabled;
+    if (newSettings.streamingEnabled !== undefined) systemPayload.streamingEnabled = newSettings.streamingEnabled;
     if (newSettings.apiKey !== undefined) systemPayload.apiKey = newSettings.apiKey;
 
-    if (Object.keys(systemPayload).length > 0) {
-      saveSystemAIConfigToFirestore(systemPayload, role).catch((err) =>
+    if (role === 'admin' && user && Object.keys(systemPayload).length > 0) {
+      saveSystemAIConfigToFirestore({ ...systemPayload, updatedAt: now }, role).catch((err) =>
         console.warn('Failed to update system config in Firestore:', err)
       );
     }
@@ -708,16 +814,10 @@ export default function App() {
   };
 
   const handleExportHistory = () => {
-    const dataStr =
-      'data:text/json;charset=utf-8,' +
-      encodeURIComponent(JSON.stringify(sessions, null, 2));
-
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(sessions, null, 2));
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute(
-      'download',
-      `ai-chat-export-${new Date().toISOString().slice(0, 10)}.json`
-    );
+    downloadAnchor.setAttribute('download', `ai-chat-export-${new Date().toISOString().slice(0, 10)}.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -728,7 +828,6 @@ export default function App() {
       showToast('Please select at least one response to export.', 'info');
       return;
     }
-
     if (isExportingPDF) return;
 
     const selectedMsgs = messages.filter((m) => selectedMessageIds.has(m.id));
@@ -752,7 +851,6 @@ export default function App() {
         selectedModel.name,
         messages
       );
-
       if (success) {
         showToast('PDF exported successfully!', 'success');
       } else {
@@ -767,11 +865,13 @@ export default function App() {
   };
 
   const handleExportPDF = async () => {
+    // When one or more responses are selected, export ONLY those selected response cards!
     if (selectedMessageIds.size > 0) {
       await handleExportSelected();
       return;
     }
 
+    // If user is in select mode but has not selected any response yet:
     if (isSelectMode && selectedMessageIds.size === 0) {
       showToast('Please select at least one response to export.', 'info');
       return;
@@ -786,7 +886,6 @@ export default function App() {
 
     setIsExportingPDF(true);
     showToast('Generating conversation PDF...', 'info');
-
     try {
       const success = await exportChatToPDF(activeSession, messages, selectedModel.name);
       if (success) {
@@ -804,56 +903,49 @@ export default function App() {
 
   const handleClearCurrentChat = () => {
     if (!activeSessionId) return;
-
-    setSessions((prev) => {
-      const updated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: [] } : s));
-      const target = updated.find((s) => s.id === activeSessionId);
-      if (target && user) {
-        saveSessionToFirestore(user.uid, target).catch((err) =>
-          console.warn('Failed to clear current chat in Firestore:', err)
-        );
-      }
-      return updated;
-    });
+    const updated = sessions.map((s) => (s.id === activeSessionId ? { ...s, messages: [] } : s));
+    setSessions(updated);
+    const target = updated.find((s) => s.id === activeSessionId);
+    if (target && user) {
+      saveSessionToFirestore(user.uid, target).catch((err) =>
+        console.warn('Failed to clear current chat in Firestore:', err)
+      );
+    }
   };
 
   const handleToggleLike = (messageId: string, liked: boolean) => {
     if (!activeSessionId) return;
-
-    setSessions((prev) => {
-      const updated = prev.map((s) => {
-        if (s.id !== activeSessionId) return s;
-        return {
-          ...s,
-          messages: s.messages.map((m) => {
-            if (m.id !== messageId) return m;
-            return {
-              ...m,
-              liked: m.liked === liked ? null : liked,
-            };
-          }),
-        };
-      });
-
-      const target = updated.find((s) => s.id === activeSessionId);
-      if (target && user) {
-        saveSessionToFirestore(user.uid, target);
-      }
-      return updated;
+    const updated = sessions.map((s) => {
+      if (s.id !== activeSessionId) return s;
+      return {
+        ...s,
+        messages: s.messages.map((m) => {
+          if (m.id !== messageId) return m;
+          return { ...m, liked: m.liked === liked ? null : liked };
+        }),
+      };
     });
+    setSessions(updated);
+    const target = updated.find((s) => s.id === activeSessionId);
+    if (target && user) {
+      saveSessionToFirestore(user.uid, target);
+    }
   };
 
+  // Automatically resume and send pending message once user authenticates (via login or account creation)
   useEffect(() => {
     if (user && pendingMessage) {
       const { content, attachments } = pendingMessage;
       setPendingMessage(null);
       setIsAuthRequiredModalOpen(false);
+      // Dispatch clear event so ChatInput empties the composer after successful send
       window.dispatchEvent(new CustomEvent('chat-input-clear'));
       handleSendMessage(content, attachments);
     }
   }, [user, pendingMessage]);
 
   const handleSendMessage = async (content: string, attachments?: Attachment[]) => {
+    // Main requirement: Block unauthenticated users from sending to AI and show auth dialog
     if (!user) {
       setPendingMessage({ content, attachments });
       setIsAuthRequiredModalOpen(true);
@@ -870,14 +962,15 @@ export default function App() {
     };
 
     let targetSessionId = activeSessionId;
+    let currentSession: ChatSession;
     let isNewSession = false;
 
     if (!targetSessionId) {
       isNewSession = true;
+      // Temporary title based on first words while AI creates concise 3-5 word title
       const initialWords = content.trim().split(/\s+/).slice(0, 4).join(' ');
       const title = initialWords ? `${initialWords}...` : 'New conversation';
-
-      const newSession: ChatSession = {
+      currentSession = {
         id: `sess-${Date.now()}`,
         title,
         createdAt: Date.now(),
@@ -885,37 +978,37 @@ export default function App() {
         model: selectedModel.name,
         messages: [userMsg],
       };
-
-      targetSessionId = newSession.id;
-      setActiveSessionId(newSession.id);
-      setSessions((prev) => [newSession, ...prev]);
+      targetSessionId = currentSession.id;
+      setSessions((prev) => [currentSession, ...prev]);
+      setActiveSessionId(currentSession.id);
 
       if (user) {
-        saveSessionToFirestore(user.uid, newSession);
+        saveSessionToFirestore(user.uid, currentSession);
       }
     } else {
-      const existing = sessions.find((s) => s.id === targetSessionId);
+      // Append to active session
+      const existing = sessions.find((s) => s.id === targetSessionId)!;
+      // If this session has no prior user messages or still has the placeholder title, generate title
       const prevUserMsgs = existing?.messages.filter((m) => m.role === 'user') || [];
       if (prevUserMsgs.length === 0 || existing?.title === 'New conversation') {
         isNewSession = true;
       }
-
+      currentSession = {
+        ...existing,
+        updatedAt: Date.now(),
+        messages: [...existing.messages, userMsg],
+      };
       setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== targetSessionId) return s;
-          const updatedSession = {
-            ...s,
-            updatedAt: Date.now(),
-            messages: [...s.messages, userMsg],
-          };
-          if (user) {
-            saveSessionToFirestore(user.uid, updatedSession);
-          }
-          return updatedSession;
-        })
+        prev.map((s) => (s.id === targetSessionId ? currentSession : s))
       );
+
+      if (user) {
+        saveSessionToFirestore(user.uid, currentSession);
+      }
     }
 
+    // Automatically generate a concise 3-5 word title for new chat sessions using the AI
+    // based on the first user message, and update the session list immediately.
     if (isNewSession) {
       const capturedSessionId = targetSessionId;
       generateChatTitle(content, selectedModel, settings.apiKey)
@@ -940,13 +1033,14 @@ export default function App() {
         });
     }
 
+    // Immediately follow the new user message to the bottom even if previously scrolled to the top
     shouldAutoFollowRef.current = true;
     isNearBottomRef.current = true;
-
     requestAnimationFrame(() => {
       scrollToBottom();
     });
 
+    // Trigger AI response
     setIsThinking(true);
 
     try {
@@ -970,6 +1064,7 @@ export default function App() {
       setSessions((prev) => {
         const updated = prev.map((s) => {
           if (s.id !== targetSessionId) return s;
+          // Mark the user message as sent and append the completed assistant message
           const updatedMessages = s.messages.map((m) =>
             m.id === userMsg.id ? { ...m, status: 'sent' as const } : m
           );
@@ -979,7 +1074,6 @@ export default function App() {
             messages: [...updatedMessages, assistantMsg],
           };
         });
-
         const target = updated.find((s) => s.id === targetSessionId);
         if (target && user) {
           saveSessionToFirestore(user.uid, target);
@@ -989,7 +1083,6 @@ export default function App() {
     } catch (err: any) {
       const errorDetail =
         err instanceof Error ? err.message : 'An error occurred while generating the response.';
-
       const errorMsg: Message = {
         id: `msg-${Date.now()}`,
         role: 'assistant',
@@ -999,25 +1092,16 @@ export default function App() {
         status: 'error',
         model: selectedModel.name,
       };
-
       setSessions((prev) => {
         const updated = prev.map((s) => {
           if (s.id !== targetSessionId) return s;
           const updatedMessages = s.messages.map((m) =>
             m.id === userMsg.id
-              ? {
-                  ...m,
-                  status: 'failed' as const,
-                  errorMessage: errorDetail,
-                }
+              ? { ...m, status: 'failed' as const, errorMessage: errorDetail }
               : m
           );
-          return {
-            ...s,
-            messages: [...updatedMessages, errorMsg],
-          };
+          return { ...s, messages: [...updatedMessages, errorMsg] };
         });
-
         const target = updated.find((s) => s.id === targetSessionId);
         if (target && user) {
           saveSessionToFirestore(user.uid, target);
@@ -1029,6 +1113,9 @@ export default function App() {
     }
   };
 
+  /**
+   * Retry generating a response for a specific message (failed AI response or failed user send)
+   */
   const handleRetryMessage = async (messageId: string) => {
     if (!activeSession) return;
 
@@ -1036,8 +1123,9 @@ export default function App() {
     if (targetIndex === -1) return;
 
     const targetMsg = activeSession.messages[targetIndex];
-    let userPromptMsg: Message | undefined;
 
+    // If target message is an assistant message (e.g. error card), find the preceding user message prompt
+    let userPromptMsg: Message | undefined;
     if (targetMsg.role === 'assistant') {
       for (let i = targetIndex - 1; i >= 0; i--) {
         if (activeSession.messages[i].role === 'user') {
@@ -1051,15 +1139,16 @@ export default function App() {
 
     if (!userPromptMsg) return;
 
+    // Immediately follow to the bottom
     shouldAutoFollowRef.current = true;
     isNearBottomRef.current = true;
-
     requestAnimationFrame(() => {
       scrollToBottom();
     });
 
     setIsThinking(true);
 
+    // Set user message to 'sending' status while retrying
     setSessions((prev) =>
       prev.map((s) =>
         s.id === activeSession.id
@@ -1073,11 +1162,9 @@ export default function App() {
       )
     );
 
+    // Remove the failed assistant message if retrying from an error card
     let baseMessages = activeSession.messages;
-    if (
-      targetMsg.role === 'assistant' &&
-      (targetMsg.status === 'error' || targetMsg.status === 'failed')
-    ) {
+    if (targetMsg.role === 'assistant' && (targetMsg.status === 'error' || targetMsg.status === 'failed')) {
       baseMessages = activeSession.messages.filter((m) => m.id !== messageId);
     }
 
@@ -1120,7 +1207,6 @@ export default function App() {
     } catch (err: any) {
       const errorDetail =
         err instanceof Error ? err.message : 'An error occurred while generating the response.';
-
       const newErrorMsg: Message = {
         id: `msg-${Date.now()}`,
         role: 'assistant',
@@ -1137,11 +1223,7 @@ export default function App() {
         messages: [
           ...baseMessages.map((m) =>
             m.id === userPromptMsg!.id
-              ? {
-                  ...m,
-                  status: 'failed' as const,
-                  errorMessage: errorDetail,
-                }
+              ? { ...m, status: 'failed' as const, errorMessage: errorDetail }
               : m
           ),
           newErrorMsg,
@@ -1159,21 +1241,18 @@ export default function App() {
   const handleRegenerate = async () => {
     if (!activeSession || activeSession.messages.length === 0) return;
 
-    const lastUserMsg = [...activeSession.messages]
-      .reverse()
-      .find((m) => m.role === 'user');
-
+    // Find last user message
+    const lastUserMsg = [...activeSession.messages].reverse().find((m) => m.role === 'user');
     if (!lastUserMsg) return;
 
+    // Immediately follow to the bottom
     shouldAutoFollowRef.current = true;
     isNearBottomRef.current = true;
-
     requestAnimationFrame(() => {
       scrollToBottom();
     });
 
     setIsThinking(true);
-
     try {
       const responseText = await generateResponse(
         lastUserMsg.content,
@@ -1247,16 +1326,13 @@ export default function App() {
   const handleCopySelected = async () => {
     const selectedMsgs = messages.filter((m) => selectedMessageIds.has(m.id));
     if (selectedMsgs.length === 0) return;
-
     const formatted = selectedMsgs
       .map((m) => {
-        const sender =
-          m.role === 'user' ? 'User' : `Assistant (${m.model || selectedModel.name})`;
+        const sender = m.role === 'user' ? 'User' : `Assistant (${m.model || selectedModel.name})`;
         const time = formatTimeHHMM(m.timestamp);
         return `[${sender}${time ? ` • ${time}` : ''}]:\n${m.content}`;
       })
       .join('\n\n---\n\n');
-
     await navigator.clipboard.writeText(formatted);
     setCopiedSelected(true);
     setTimeout(() => setCopiedSelected(false), 2000);
@@ -1264,22 +1340,16 @@ export default function App() {
 
   const handleDeleteSelected = () => {
     if (!activeSession || selectedMessageIds.size === 0) return;
-
     const remaining = messages.filter((m) => !selectedMessageIds.has(m.id));
     const updatedSession: ChatSession = {
       ...activeSession,
       messages: remaining,
       updatedAt: Date.now(),
     };
-
-    setSessions((prev) =>
-      prev.map((s) => (s.id === activeSession.id ? updatedSession : s))
-    );
-
+    setSessions((prev) => prev.map((s) => (s.id === activeSession.id ? updatedSession : s)));
     if (user) {
       saveSessionToFirestore(user.uid, updatedSession);
     }
-
     setSelectedMessageIds(new Set());
     if (remaining.length === 0) {
       setIsSelectMode(false);
@@ -1298,24 +1368,43 @@ export default function App() {
           {
             id: 'sample-1',
             role: 'user',
-            content:
-              'What is the most reliable pattern for cache invalidation across distributed microservices?',
+            content: 'What is the most reliable pattern for cache invalidation across distributed microservices?',
             timestamp: Date.now() - 60000,
           },
           {
             id: 'sample-2',
             role: 'assistant',
-            content: `### Distributed Cache Invalidation: Event-Driven CDC Pattern\n\nThe two hard problems in computer science are cache invalidation and naming things. In a modern distributed architecture, the most dependable pattern is **Change Data Capture (CDC) with transactional outboxes**:\n\n1. **Transactional Outbox Pattern**:\n   * Write your database update and an outbox event in the **same atomic database transaction**.\n   * A CDC pipeline (e.g. Debezium, DynamoDB Streams) reads the commit log and emits invalidation events to a Kafka or Redis Pub/Sub topic.\n\n2. **Cache Eviction vs Cache Mutation**:\n   * **Always Evict (Delete)**, never rewrite the new value directly into cache on invalidation.\n   * Eviction is naturally idempotent. Concurrent out-of-order writes cannot overwrite newer values with stale state.\n\n\`\`\`typescript\n// Idempotent Redis Cache Invalidation\nexport async function invalidateUserCache(userId: string): Promise<void> {\n  const cacheKey = \`user:session:\${userId}\`;\n  // Atomic unlink does not block the redis event loop\n  await redis.unlink(cacheKey);\n}\n\`\`\`\n\n3. **TTL Jitter**:\n   * Always append pseudo-random jitter (\`TTL = 3600 + Math.random() * 300\`) to eliminate catastrophic cache stampedes when hot keys expire simultaneously.`,
+            content: `### Distributed Cache Invalidation: Event-Driven CDC Pattern
+
+The two hard problems in computer science are cache invalidation and naming things. In a modern distributed architecture, the most dependable pattern is **Change Data Capture (CDC) with transactional outboxes**:
+
+1. **Transactional Outbox Pattern**:
+   - Write your database update and an outbox event in the **same atomic database transaction**.
+   - A CDC pipeline (e.g. Debezium, DynamoDB Streams) reads the commit log and emits invalidation events to a Kafka or Redis Pub/Sub topic.
+
+2. **Cache Eviction vs Cache Mutation**:
+   - **Always Evict (Delete)**, never rewrite the new value directly into cache on invalidation.
+   - Eviction is naturally idempotent. Concurrent out-of-order writes cannot overwrite newer values with stale state.
+
+\`\`\`typescript
+// Idempotent Redis Cache Invalidation
+export async function invalidateUserCache(userId: string): Promise<void> {
+  const cacheKey = \`user:session:\${userId}\`;
+  // Atomic unlink does not block the redis event loop
+  await redis.unlink(cacheKey);
+}
+\`\`\`
+
+3. **TTL Jitter**:
+   - Always append pseudo-random jitter (\`TTL = 3600 + Math.random() * 300\`) to eliminate catastrophic cache stampedes when hot keys expire simultaneously.`,
             timestamp: Date.now() - 30000,
             model: selectedModel.name,
           },
         ],
       };
-
       setSessions((prev) => [sampleSession, ...prev]);
       setActiveSessionId(sampleSession.id);
       setIsSidebarOpen(false);
-
       if (user) {
         saveSessionToFirestore(user.uid, sampleSession);
       }
@@ -1330,24 +1419,35 @@ export default function App() {
           {
             id: 'sample-3',
             role: 'user',
-            content:
-              'Help troubleshoot a runaway heap memory leak in our Express Node.js service.',
+            content: 'Help troubleshoot a runaway heap memory leak in our Express Node.js service.',
             timestamp: Date.now() - 60000,
           },
           {
             id: 'sample-4',
             role: 'assistant',
-            content: `### Node.js Heap Profiling & Leak Diagnostic Protocol\n\nHere is the deterministic 3-step triage to identify and eliminate the leak:\n\n1. **Capture Heap Snapshots under Load**:\n   * Run \`node --inspect server.js\`\n   * Open Chrome DevTools at \`chrome://inspect\`\n   * Take **Snapshot 1** at baseline idle.\n   * Run a load test of 5,000 requests.\n   * Take **Snapshot 2** and use the **Comparison View** in DevTools.\n\n2. **Common Culprits**:\n   * **Global Event Listeners**: \`emitter.on('data')\` inside request handlers without \`emitter.off()\` in \`res.on('finish')\`.\n   * **Unbounded In-Memory Caches**: JavaScript \`Map\` or \`Set\` growing indefinitely without an LRU eviction cap.\n   * **Closures Retaining Parent Scope**: Storing callbacks that hold references to large request bodies.`,
+            content: `### Node.js Heap Profiling & Leak Diagnostic Protocol
+
+Here is the deterministic 3-step triage to identify and eliminate the leak:
+
+1. **Capture Heap Snapshots under Load**:
+   - Run \`node --inspect server.js\`
+   - Open Chrome DevTools at \`chrome://inspect\`
+   - Take **Snapshot 1** at baseline idle.
+   - Run a load test of 5,000 requests.
+   - Take **Snapshot 2** and use the **Comparison View** in DevTools.
+
+2. **Common Culprits**:
+   - **Global Event Listeners**: \`emitter.on('data')\` inside request handlers without \`emitter.off()\` in \`res.on('finish')\`.
+   - **Unbounded In-Memory Caches**: JavaScript \`Map\` or \`Set\` growing indefinitely without an LRU eviction cap.
+   - **Closures Retaining Parent Scope**: Storing callbacks that hold references to large request bodies.`,
             timestamp: Date.now() - 30000,
             model: selectedModel.name,
           },
         ],
       };
-
       setSessions((prev) => [sampleSession, ...prev]);
       setActiveSessionId(sampleSession.id);
       setIsSidebarOpen(false);
-
       if (user) {
         saveSessionToFirestore(user.uid, sampleSession);
       }
@@ -1359,13 +1459,13 @@ export default function App() {
     setIsShareModalOpen(true);
   };
 
+  // Listen for browser navigation / query param changes for share URLs
   useEffect(() => {
     const handleUrlCheck = () => {
       const params = new URLSearchParams(window.location.search);
       const share = params.get('share');
       setSharedViewId(share || null);
     };
-
     window.addEventListener('popstate', handleUrlCheck);
     return () => window.removeEventListener('popstate', handleUrlCheck);
   }, []);
@@ -1373,6 +1473,7 @@ export default function App() {
   const isDark = theme === 'dark';
   const hasMessages = messages.length > 0;
 
+  // Render Public Read-Only Shared Chat view when ?share=ID is in URL
   if (sharedViewId) {
     return (
       <SharedChatView
@@ -1382,11 +1483,7 @@ export default function App() {
           setSharedViewId(null);
           const url = new URL(window.location.href);
           url.searchParams.delete('share');
-          window.history.replaceState(
-            {},
-            document.title,
-            url.pathname + (url.search ? url.search : '')
-          );
+          window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : ''));
         }}
         onForkConversation={(shared) => {
           const newSessionId = `session_${Date.now()}`;
@@ -1405,14 +1502,9 @@ export default function App() {
           setSessions((prev) => [forkedSession, ...prev]);
           setActiveSessionId(newSessionId);
           setSharedViewId(null);
-
           const url = new URL(window.location.href);
           url.searchParams.delete('share');
-          window.history.replaceState(
-            {},
-            document.title,
-            url.pathname + (url.search ? url.search : '')
-          );
+          window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : ''));
 
           if (user) {
             saveSessionToFirestore(user.uid, forkedSession).catch(console.error);
@@ -1430,6 +1522,7 @@ export default function App() {
         isDark ? 'bg-[#121214] text-[#ffffff]' : 'bg-[#F8F9F7] text-[#09090b]'
       }`}
     >
+      {/* Top Bar with real Theme Toggle & Firebase Auth & Floating Header */}
       <TopBar
         currentModel={selectedModel}
         onOpenModelSelector={() => setIsModelSelectorOpen(true)}
@@ -1468,6 +1561,7 @@ export default function App() {
       />
 
       <div className="flex-1 flex overflow-hidden relative min-h-0">
+        {/* Collapsible Sidebar */}
         <Sidebar
           isOpen={isSidebarOpen}
           onClose={() => setIsSidebarOpen(false)}
@@ -1475,9 +1569,7 @@ export default function App() {
           activeSessionId={activeSessionId}
           onSelectSession={(id) => {
             setActiveSessionId(id);
-            if (window.innerWidth < 768) {
-              setIsSidebarOpen(false);
-            }
+            if (window.innerWidth < 768) setIsSidebarOpen(false);
           }}
           onNewChat={handleNewChat}
           onDeleteSession={handleDeleteSession}
@@ -1494,14 +1586,21 @@ export default function App() {
           onSearchChange={setSidebarSearchQuery}
         />
 
+        {/* Main View Area */}
         <main className="flex-1 flex flex-col relative overflow-hidden">
           {!hasMessages ? (
+            /* =========================================================
+               EMPTY / LANDING STATE (FAITHFUL TO SCREENSHOT)
+               ========================================================= */
             <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 max-w-4xl mx-auto w-full select-none">
+              {/* Vertical center cluster */}
               <div className="flex flex-col items-center text-center space-y-3 mb-6 w-full">
+                {/* Robot Mascot matching the screenshot */}
                 <div className="mb-1">
                   <RobotMascot size={76} />
                 </div>
 
+                {/* H1 Prominent Heading */}
                 <h1
                   className={`text-2xl sm:text-3xl font-bold tracking-tight ${
                     isDark ? 'text-white' : 'text-[#09090b]'
@@ -1510,6 +1609,7 @@ export default function App() {
                   How can I help you?
                 </h1>
 
+                {/* Row of Quick Action Starters below H1 */}
                 <div className="w-full max-w-2xl pt-1 px-1">
                   <div className="flex items-center justify-center flex-wrap gap-2 sm:gap-2.5">
                     {LANDING_QUICK_STARTERS.map((starter) => {
@@ -1544,20 +1644,25 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Centered Input & Action Pills */}
               <div className="w-full max-w-2xl px-2">
                 <ChatInput
-                  disabled={isThinking}
-                  isCenteringLayout={true}
-                  isTyping={isThinking}
                   onSendMessage={handleSendMessage}
+                  disabled={isThinking}
+                  isTyping={isThinking}
                   placeholder="Ask anything..."
-                  quotedText={quotedInsert}
+                  isCenteringLayout={true}
                   theme={theme}
+                  quotedText={quotedInsert}
                 />
               </div>
             </div>
           ) : (
+            /* =========================================================
+               ACTIVE CHAT STATE
+               ========================================================= */
             <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+              {/* Subtle Scroll Progress Bar at very top of chat area */}
               <div
                 className="absolute top-0 inset-x-0 h-[2.5px] z-30 pointer-events-none overflow-hidden"
                 role="progressbar"
@@ -1566,9 +1671,13 @@ export default function App() {
                 aria-valuemax={100}
                 aria-label="Conversation scroll progress"
               >
+                {/* Subtle hairline track */}
                 <div
-                  className={`w-full h-full ${isDark ? 'bg-white/5' : 'bg-black/5'}`}
+                  className={`w-full h-full ${
+                    isDark ? 'bg-white/5' : 'bg-black/5'
+                  }`}
                 />
+                {/* Dynamic progress fill */}
                 <div
                   className={`absolute top-0 left-0 h-full transition-[width] duration-150 ease-out ${
                     isDark
@@ -1579,6 +1688,7 @@ export default function App() {
                 />
               </div>
 
+              {/* In-Chat Search Bar */}
               {isSearchOpen && (
                 <div
                   className={`shrink-0 px-3 sm:px-4 py-2 border-b flex items-center justify-between gap-2 sm:gap-3 z-30 backdrop-blur-md transition-all animate-in slide-in-from-top-2 duration-150 ${
@@ -1588,7 +1698,11 @@ export default function App() {
                   }`}
                 >
                   <div className="flex items-center gap-2 flex-1 max-w-xl">
-                    <Search className={`w-4 h-4 shrink-0 ${isDark ? 'text-purple-400' : 'text-purple-600'}`} />
+                    <Search
+                      className={`w-4 h-4 shrink-0 ${
+                        isDark ? 'text-purple-400' : 'text-purple-600'
+                      }`}
+                    />
                     <input
                       ref={chatSearchInputRef}
                       type="text"
@@ -1602,9 +1716,7 @@ export default function App() {
                           e.preventDefault();
                           if (totalMatches > 0) {
                             if (e.shiftKey) {
-                              setCurrentMatchIndex(
-                                (prev) => (prev - 1 + totalMatches) % totalMatches
-                              );
+                              setCurrentMatchIndex((prev) => (prev - 1 + totalMatches) % totalMatches);
                             } else {
                               setCurrentMatchIndex((prev) => (prev + 1) % totalMatches);
                             }
@@ -1627,9 +1739,7 @@ export default function App() {
                           chatSearchInputRef.current?.focus();
                         }}
                         className={`p-1 rounded cursor-pointer transition-colors ${
-                          isDark
-                            ? 'text-neutral-400 hover:text-white'
-                            : 'text-neutral-500 hover:text-black'
+                          isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-black'
                         }`}
                         title="Clear search text"
                         aria-label="Clear search text"
@@ -1640,6 +1750,7 @@ export default function App() {
                   </div>
 
                   <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                    {/* Match count badge */}
                     {chatSearchQuery.trim() && (
                       <span
                         className={`text-[11px] font-mono px-2 py-0.5 rounded-full border ${
@@ -1652,26 +1763,21 @@ export default function App() {
                             : 'bg-rose-50 text-rose-700 border-rose-200'
                         }`}
                       >
-                        {totalMatches > 0
-                          ? `${currentMatchIndex + 1} of ${totalMatches}`
-                          : '0 matches'}
+                        {totalMatches > 0 ? `${currentMatchIndex + 1} of ${totalMatches}` : '0 matches'}
                       </span>
                     )}
 
+                    {/* Up / Down navigation buttons */}
                     <div
                       className={`flex items-center border rounded-lg overflow-hidden ${
-                        isDark
-                          ? 'border-[#303038] bg-[#1f1f25]'
-                          : 'border-neutral-200 bg-neutral-50'
+                        isDark ? 'border-[#303038] bg-[#1f1f25]' : 'border-neutral-200 bg-neutral-50'
                       }`}
                     >
                       <button
                         type="button"
                         onClick={() => {
                           if (totalMatches > 0) {
-                            setCurrentMatchIndex(
-                              (prev) => (prev - 1 + totalMatches) % totalMatches
-                            );
+                            setCurrentMatchIndex((prev) => (prev - 1 + totalMatches) % totalMatches);
                           }
                         }}
                         disabled={totalMatches === 0}
@@ -1685,13 +1791,7 @@ export default function App() {
                       >
                         <ChevronUp className="w-3.5 h-3.5" />
                       </button>
-
-                      <div
-                        className={`w-[1px] h-4 ${
-                          isDark ? 'bg-[#303038]' : 'bg-neutral-200'
-                        }`}
-                      />
-
+                      <div className={`w-[1px] h-4 ${isDark ? 'bg-[#303038]' : 'bg-neutral-200'}`} />
                       <button
                         type="button"
                         onClick={() => {
@@ -1712,6 +1812,7 @@ export default function App() {
                       </button>
                     </div>
 
+                    {/* Close search button */}
                     <button
                       type="button"
                       onClick={() => {
@@ -1732,23 +1833,21 @@ export default function App() {
                 </div>
               )}
 
+              {/* Message scroll area */}
               <div
                 ref={chatContainerRef}
                 onScroll={(e) => {
                   const target = e.currentTarget;
                   const scrollTop = target.scrollTop;
                   const maxScroll = target.scrollHeight - target.clientHeight;
-
                   if (maxScroll > 0) {
-                    const progress = Math.min(
-                      100,
-                      Math.max(0, (scrollTop / maxScroll) * 100)
-                    );
+                    const progress = Math.min(100, Math.max(0, (scrollTop / maxScroll) * 100));
                     setScrollProgress(progress);
                   } else {
                     setScrollProgress(100);
                   }
 
+                  // Precise distance from the bottom of the actual chat scroll container
                   const distanceFromBottom =
                     target.scrollHeight - target.scrollTop - target.clientHeight;
                   const isNearBottom = distanceFromBottom <= AUTO_SCROLL_THRESHOLD;
@@ -1757,6 +1856,7 @@ export default function App() {
                   setShowScrollBottom(distanceFromBottom > 180);
                   setShowScrollTop(scrollTop > 200);
 
+                  // Manual user scroll detection: if user scrolls upward > 120px, turn off auto-follow
                   if (!isNearBottom) {
                     shouldAutoFollowRef.current = false;
                   } else {
@@ -1766,34 +1866,32 @@ export default function App() {
                 className="flex-1 overflow-y-auto pb-44"
               >
                 <ChatMessageList
-                  currentMatchIndex={currentMatchIndex}
-                  isThinking={isThinking}
                   messages={messages}
+                  isThinking={isThinking}
+                  onRegenerate={handleRegenerate}
+                  onRetryMessage={handleRetryMessage}
+                  onToggleLike={handleToggleLike}
+                  onQuote={handleQuote}
+                  theme={theme}
+                  searchQuery={chatSearchQuery}
+                  currentMatchIndex={currentMatchIndex}
+                  onMatchIndexChange={setCurrentMatchIndex}
                   onClearSearch={() => {
                     setChatSearchQuery('');
                     setIsSearchOpen(false);
                   }}
-                  onMatchIndexChange={setCurrentMatchIndex}
-                  onQuote={handleQuote}
-                  onRegenerate={handleRegenerate}
-                  onRetryMessage={handleRetryMessage}
-                  onToggleLike={handleToggleLike}
-                  searchQuery={chatSearchQuery}
-                  theme={theme}
                   isSelectMode={isSelectMode}
                   selectedMessageIds={selectedMessageIds}
                   onToggleSelectMessage={handleToggleSelectMessage}
                   onStartSelectWithMessage={handleStartSelectWithMessage}
-                  enableTTS={(settings as any).enableTTS !== false}
+                  enableTTS={settings.enableTTS !== false}
                   onShareMessage={handleShareMessage}
                 />
-
-                <div
-                  ref={messagesEndRef}
-                  className="h-[1px] w-full shrink-0 pointer-events-none"
-                />
+                {/* Bottom sentinel anchor for layout measurements & precise following */}
+                <div ref={messagesEndRef} className="h-[1px] w-full shrink-0 pointer-events-none" />
               </div>
 
+              {/* Floating Back to top button (appears when scrolled past first message) */}
               {showScrollTop && (
                 <div className="absolute top-3 sm:top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-auto animate-in fade-in slide-in-from-top-2 duration-200">
                   <button
@@ -1811,7 +1909,7 @@ export default function App() {
                         ? 'bg-[#18181c]/90 hover:bg-[#24242c] border-[#383844] text-neutral-200 hover:text-white shadow-black/60 hover:border-purple-400/80'
                         : 'bg-white/95 hover:bg-neutral-50 border-neutral-300 text-neutral-700 hover:text-purple-700 shadow-neutral-300/80 hover:border-purple-400'
                     }`}
-                    title="Back to top"
+                    title="Back to top (Return to start of conversation)"
                     aria-label="Back to top of conversation"
                   >
                     <ChevronUp className="w-3.5 h-3.5 text-purple-400 transition-transform duration-150 group-hover:-translate-y-0.5" />
@@ -1820,6 +1918,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* Jump to latest message button (floating bottom center, icon-only) */}
               {showScrollBottom && (
                 <div className="absolute bottom-[114px] sm:bottom-[120px] left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
                   <button
@@ -1838,6 +1937,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* Docked bottom input container / Select Mode Action Bar */}
               <div
                 className={`absolute bottom-0 inset-x-0 pt-8 pb-5 px-4 z-20 ${
                   isDark
@@ -1859,20 +1959,17 @@ export default function App() {
                           type="button"
                           onClick={handleToggleSelectAll}
                           className={`text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors cursor-pointer ${
-                            selectedMessageIds.size === messages.length &&
-                            messages.length > 0
+                            selectedMessageIds.size === messages.length && messages.length > 0
                               ? 'bg-purple-600 border-purple-500 text-white'
                               : isDark
                               ? 'bg-[#222227] border-[#34343d] text-neutral-300 hover:text-white hover:bg-[#2a2a32]'
                               : 'bg-neutral-100 border-neutral-300 text-neutral-700 hover:text-black hover:bg-neutral-200'
                           }`}
                         >
-                          {selectedMessageIds.size === messages.length &&
-                          messages.length > 0
+                          {selectedMessageIds.size === messages.length && messages.length > 0
                             ? 'Deselect all'
                             : 'Select all'}
                         </button>
-
                         <span className="text-xs font-mono text-neutral-400 select-none">
                           <strong
                             className={`font-semibold ${
@@ -1890,6 +1987,7 @@ export default function App() {
                       </div>
 
                       <div className="flex items-center gap-1.5 sm:gap-2">
+                        {/* Copy Selected */}
                         <button
                           type="button"
                           onClick={handleCopySelected}
@@ -1917,6 +2015,7 @@ export default function App() {
                           )}
                         </button>
 
+                        {/* Export Selected */}
                         <button
                           type="button"
                           onClick={handleExportSelected}
@@ -1945,6 +2044,7 @@ export default function App() {
                           )}
                         </button>
 
+                        {/* Delete Selected */}
                         <button
                           type="button"
                           onClick={() => setShowDeleteSelectedConfirm(true)}
@@ -1961,6 +2061,7 @@ export default function App() {
                           <span className="sm:hidden">Delete</span>
                         </button>
 
+                        {/* Exit Select Mode */}
                         <button
                           type="button"
                           onClick={() => {
@@ -1982,15 +2083,14 @@ export default function App() {
                   ) : (
                     <>
                       <ChatInput
-                        disabled={isThinking}
-                        isCenteringLayout={false}
-                        isTyping={isThinking}
                         onSendMessage={handleSendMessage}
+                        disabled={isThinking}
+                        isTyping={isThinking}
                         placeholder="Ask anything..."
-                        quotedText={quotedInsert}
+                        isCenteringLayout={false}
                         theme={theme}
+                        quotedText={quotedInsert}
                       />
-
                       <div className="text-center mt-2">
                         <span className="text-[11px] text-neutral-400 font-mono inline-flex items-center justify-center gap-1.5 flex-wrap">
                           {selectedModel.provider === 'LM-Kit One' ? (
@@ -1998,22 +2098,13 @@ export default function App() {
                               <Server className="w-3 h-3 text-purple-400" />
                               <span>LM-Kit One: {selectedModel.name}</span>
                               <span className="opacity-75 text-[10px]">
-                                (
-                                {selectedModel.customConfig?.baseUrl
-                                  ? selectedModel.customConfig.baseUrl.replace(
-                                      /^https?:\/\//,
-                                      ''
-                                    )
-                                  : 'localhost:5189'}
-                                )
+                                ({selectedModel.customConfig?.baseUrl ? selectedModel.customConfig.baseUrl.replace(/^https?:\/\//, '') : 'localhost:5189'})
                               </span>
                             </span>
                           ) : (
                             <span>Running on {selectedModel.name}</span>
                           )}
-                          <span>
-                            · Enter sends, Shift+Enter for new line · ↑/↓ navigate messages
-                          </span>
+                          <span>· Enter sends, Shift+Enter for new line · ↑/↓ navigate messages</span>
                         </span>
                       </div>
                     </>
@@ -2025,6 +2116,7 @@ export default function App() {
         </main>
       </div>
 
+      {/* Modals & Dialogs */}
       <ModelSelectorModal
         isOpen={isModelSelectorOpen}
         onClose={() => setIsModelSelectorOpen(false)}
@@ -2103,17 +2195,14 @@ export default function App() {
         onClose={() => setShowDeleteSelectedConfirm(false)}
         onConfirm={handleDeleteSelected}
         title="Delete selected messages?"
-        description={`Are you sure you want to permanently delete ${
-          selectedMessageIds.size
-        } selected message${
-          selectedMessageIds.size === 1 ? '' : 's'
-        }? This action cannot be undone.`}
+        description={`Are you sure you want to permanently delete ${selectedMessageIds.size} selected message${selectedMessageIds.size === 1 ? '' : 's'}? This action cannot be undone.`}
         confirmLabel="Delete"
         cancelLabel="Cancel"
         isDestructive={true}
         theme={theme}
       />
 
+      {/* Floating Toast Notification Banner */}
       {toastNotification && (
         <div
           role="status"

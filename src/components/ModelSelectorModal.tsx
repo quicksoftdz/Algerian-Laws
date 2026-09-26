@@ -202,7 +202,6 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="model-modal-title"
-      onClick={onClose}
       className={backdropClasses}
     >
       <div
@@ -786,7 +785,14 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
             {/* Model items list */}
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {filteredModels.map((model) => {
-                const isSelected = model.id === selectedModel.id;
+                const isSelected =
+                  model.id === selectedModel.id ||
+                  model.name === selectedModel.name ||
+                  (model.customConfig?.modelId && model.customConfig.modelId === selectedModel.id) ||
+                  (selectedModel.customConfig?.modelId && selectedModel.customConfig.modelId === model.id) ||
+                  (model.id.startsWith('lmkit/') && model.id.replace(/^lmkit\//, '') === selectedModel.id) ||
+                  (selectedModel.id.startsWith('lmkit/') && selectedModel.id.replace(/^lmkit\//, '') === model.id);
+
                 const isLMKit = model.provider === 'LM-Kit One';
 
                 return (
@@ -832,7 +838,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                           </span>
                         )}
 
-                        {model.isCustom && (
+                        {model.id.startsWith('lmkit-custom-') && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20">
                             Custom API
                           </span>
@@ -862,8 +868,8 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                     </div>
 
                     <div className="pt-0.5 shrink-0 flex items-center gap-2">
-                      {/* Delete button for custom user-added models */}
-                      {model.isCustom && onDeleteCustomModel && (
+                      {/* Delete button only for user-created custom models */}
+                      {model.id.startsWith('lmkit-custom-') && onDeleteCustomModel && (
                         <button
                           type="button"
                           onClick={(e) => {
