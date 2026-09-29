@@ -124,13 +124,16 @@ export async function executeLMKitChatCompletion(options: {
     prompt,
     systemPrompt = 'You are a helpful, precise AI assistant.',
     dialect = 'openai',
-    temperature = 0.7,
+    temperature = 0.1,
   } = options;
 
   if (useGateway(baseUrl)) {
     if (dialect !== 'openai') {
       throw new Error('The LM-Kit gateway currently uses the OpenAI-compatible dialect.');
     }
+
+    console.log('[LM-Kit REQUEST] modelId =', modelId);
+    console.log('[LM-Kit REQUEST] baseUrl =', baseUrl);
 
     const response = await fetch(GATEWAY_PATH + '/chat', {
       method: 'POST',

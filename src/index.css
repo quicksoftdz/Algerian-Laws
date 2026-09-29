@@ -32,7 +32,7 @@
 
   html.light body {
     background-color: #F8F9F7;
-    color: #09090b;
+    color: #000000;
   }
 
   body {
@@ -467,4 +467,161 @@ html.light .hljs-tag,
 html.light .hljs-name {
   color: #e11d48;
 }
+
+/* =========================================================
+   LIGHT THEME FORM & UI TEXT CONTRAST ENHANCEMENTS
+   Converts all gray, light gray, muted gray, and low-contrast
+   UI/form text in Light Theme to solid black (#000000).
+   Icons, colored status accents, and Dark Theme remain unchanged.
+   ========================================================= */
+
+/* 1. Global Light Theme base text color */
+html.light,
+html.light body {
+  color: #000000;
+}
+
+/* 2. Form Labels & Field Legends */
+html.light label,
+html.light legend {
+  color: #000000 !important;
+}
+
+/* 3. Form Input Fields, Textareas & Selects */
+html.light input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="submit"]):not([type="button"]):not([type="reset"]),
+html.light textarea,
+html.light select {
+  color: #000000 !important;
+}
+
+/* 4. Form Placeholders */
+html.light ::placeholder,
+html.light input::placeholder,
+html.light textarea::placeholder,
+html.light .placeholder-neutral-400::placeholder,
+html.light .placeholder-neutral-500::placeholder,
+html.light [class*="placeholder-"]::placeholder,
+html.light [class*="placeholder:text-"]::placeholder {
+  color: #000000 !important;
+  opacity: 0.85 !important;
+}
+
+/* 5. All Neutral / Gray Text Utilities in Light Theme (excluding SVG icons and paths) */
+html.light :is(
+  .text-neutral-100,
+  .text-neutral-200,
+  .text-neutral-300,
+  .text-neutral-400,
+  .text-neutral-500,
+  .text-neutral-600,
+  .text-neutral-700,
+  .text-neutral-800,
+  .text-neutral-900,
+  .text-gray-100,
+  .text-gray-200,
+  .text-gray-300,
+  .text-gray-400,
+  .text-gray-500,
+  .text-gray-600,
+  .text-gray-700,
+  .text-gray-800,
+  .text-gray-900,
+  .text-zinc-100,
+  .text-zinc-200,
+  .text-zinc-300,
+  .text-zinc-400,
+  .text-zinc-500,
+  .text-zinc-600,
+  .text-zinc-700,
+  .text-zinc-800,
+  .text-zinc-900,
+  .text-slate-100,
+  .text-slate-200,
+  .text-slate-300,
+  .text-slate-400,
+  .text-slate-500,
+  .text-slate-600,
+  .text-slate-700,
+  .text-slate-800,
+  .text-slate-900,
+  [class*="text-neutral-"],
+  [class*="text-gray-"],
+  [class*="text-zinc-"],
+  [class*="text-slate-"]
+):not(svg):not(path):not(.text-white):not([class*="text-white"]) {
+  color: #000000 !important;
+}
+
+/* 6. Neutral hover text classes in Light Theme (stay black unless hovering to colored text or over dark background) */
+html.light :is(
+  [class*="hover:text-neutral-"],
+  [class*="hover:text-gray-"],
+  [class*="hover:text-zinc-"],
+  [class*="hover:text-slate-"]
+):hover:not(svg):not(path):not([class*="hover:text-purple"]):not([class*="hover:text-rose"]):not([class*="hover:text-emerald"]):not([class*="hover:text-amber"]):not([class*="hover:text-blue"]):not([class*="hover:text-red"]):not([class*="hover:text-white"]):not([class*="hover:bg-neutral-800"]):not([class*="hover:bg-neutral-900"]):not([class*="hover:bg-black"]) {
+  color: #000000 !important;
+}
+
+/* 7. Preserve SVG icons and their inherited stroke/fill colors */
+html.light svg:is(.text-neutral-200, .text-neutral-300, .text-gray-300, .text-zinc-300) {
+  color: #d4d4d8 !important;
+}
+html.light svg:is(.text-neutral-400, .text-gray-400, .text-zinc-400, .text-slate-400) {
+  color: #a3a3a3 !important;
+}
+html.light svg:is(.text-neutral-500, .text-gray-500, .text-zinc-500, .text-slate-500) {
+  color: #737373 !important;
+}
+html.light svg:is(.text-neutral-600, .text-gray-600, .text-zinc-600, .text-slate-600) {
+  color: #525252 !important;
+}
+html.light svg:is(.text-neutral-700, .text-gray-700, .text-zinc-700, .text-slate-700) {
+  color: #404040 !important;
+}
+html.light svg:is(.text-neutral-800, .text-gray-800, .text-zinc-800, .text-slate-800) {
+  color: #262626 !important;
+}
+
+/* Unclassed SVGs nested inside neutral containers preserve neutral icon tone */
+html.light :is(.text-neutral-200, .text-neutral-300, .text-neutral-400, .text-gray-400, .text-zinc-400) > svg:not([class*="text-"]):not([class*="stroke-"]) {
+  color: #a3a3a3 !important;
+}
+html.light :is(.text-neutral-500, .text-gray-500, .text-zinc-500) > svg:not([class*="text-"]):not([class*="stroke-"]) {
+  color: #737373 !important;
+}
+html.light :is(.text-neutral-600, .text-neutral-700, .text-gray-600, .text-zinc-600) > svg:not([class*="text-"]):not([class*="stroke-"]) {
+  color: #525252 !important;
+}
+
+/* 8. Preserve white text on dark/colored buttons, badges, and avatars (excluding modifier classes like selection: or hover: at rest) */
+html.light :is(
+  .text-white,
+  button.text-white,
+  a.text-white,
+  [class*="bg-purple-"] .text-white,
+  [class*="bg-emerald-"] .text-white,
+  [class*="bg-rose-"] .text-white,
+  [class*="bg-neutral-900"] .text-white,
+  [class*="bg-black"] .text-white
+):not([class*="selection:"]):not(.code-block-pre) {
+  color: #ffffff !important;
+}
+
+/* Hovering onto elements with hover:text-white in Light Theme */
+html.light :is([class*="hover:text-white"]:hover, [class*="group-hover:text-white"]:hover) {
+  color: #ffffff !important;
+}
+
+/* Hovering onto dark backgrounds in Light Theme retains white text readability */
+html.light [class*="hover:bg-neutral-800"]:hover,
+html.light [class*="hover:bg-neutral-900"]:hover,
+html.light [class*="hover:bg-black"]:hover {
+  color: #ffffff !important;
+}
+
+/* Code blocks in Light Theme use crisp black base text for untokenized syntax */
+html.light .code-block-pre {
+  color: #000000 !important;
+}
+
 

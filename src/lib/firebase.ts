@@ -1,8 +1,9 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  getAuth,
   GoogleAuthProvider,
+  getAuth,
   signInWithPopup,
+  signInWithEmailAndPassword,
   signOut,
   User as FirebaseUser,
 } from 'firebase/auth';
@@ -751,6 +752,26 @@ export async function authenticateAdminCredentials(
       { identifier: cleanId, email: adminEmail }
     );
     throw new Error('Invalid administrator credentials.');
+  }
+
+  // Sign in through Firebase Authentication.
+  // Firestore security rules require auth.currentUser.
+  try {
+    await signInWithEmailAndPassword(auth, adminEmail, cleanPass);
+  } catch (error) {
+    console.error('Firebase administrator sign-in failed:', error);
+
+    await logAdminEvent(
+      'ADMIN_FIREBASE_AUTH_FAILED',
+      `Firebase Authentication failed for administrator: ${adminEmail}`,
+      'security',
+      { email: adminEmail, identifier: cleanId }
+    );
+
+    throw new Error(
+      'Administrator credentials were accepted, but Firebase Authentication failed. ' +
+      'Make sure the administrator email/password matches the Firebase Authentication account.'
+    );
   }
 
   // 3. Update authoritative database state on successful authentication
